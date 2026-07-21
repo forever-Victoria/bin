@@ -29,7 +29,8 @@ log = logging.getLogger("bin.tts")
 class DoubaoTtsV1Service(TTSService):
     def __init__(self) -> None:
         self._url = settings.tts_ws_url
-        self._token = settings.volc_token
+        self._appid = settings.tts_appid
+        self._token = settings.tts_access_token
 
     async def synthesize(self, text: str, speaker: str) -> AsyncIterator[bytes]:
         if not text.strip():
@@ -39,7 +40,7 @@ class DoubaoTtsV1Service(TTSService):
 
         payload = {
             "app": {
-                "appid": settings.volc_appid,
+                "appid": self._appid,
                 "token": self._token,
                 "cluster": settings.tts_cluster,
             },

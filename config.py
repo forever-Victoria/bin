@@ -7,10 +7,13 @@
         Resource-Id：volc.bigasr.sauc.duration（1.0 小时版）
   - TTS：语音合成 V1 ws_binary（可靠、示例多；V3 双向流式留作升级）
         wss://openspeech.bytedance.com/api/v1/tts/ws_binary
-        cluster volcano_tts，音色 voice_type（如 BV700_streaming 灿灿）
+        cluster volcano_tts，音色 voice_type（如 BV001_streaming 通用女声）
   - LLM：方舟 Ark（OpenAI 兼容）
         base_url https://ark.cn-beijing.volces.com/api/v3
         model doubao Model ID 或 Endpoint ID（ep-xxx）
+
+注意：新控制台「每个服务各有一对 APP ID + Access Token」。ASR 与 TTS 凭证分开配置；
+若你这两个服务共用同一对，填 VOLC_APPID/VOLC_ACCESS_TOKEN 即可，ASR_*/TTS_* 留空会自动复用。
 """
 from __future__ import annotations
 
@@ -53,16 +56,20 @@ class Settings:
     default_role_id: str
     roles_path: str
 
-    # ── 豆包通用凭证（ASR/TTS 共用 APP ID 与 Access Token）─────────────────
+    # ── 豆包通用凭证（ASR/TTS 共用时的兜底）─────────────────────────────────
     volc_appid: str
-    volc_token: str          # access_token
+    volc_token: str
 
     # ── 豆包 ASR（大模型流式 V3）──────────────────────────────────────────
+    asr_appid: str           # 流式语音识别大模型 的 APP ID（留空则复用 volc_appid）
+    asr_access_token: str
     asr_resource_id: str
     asr_ws_url: str
     asr_sample_rate: int     # 上行 16k
 
     # ── 豆包 TTS（V1 ws_binary）───────────────────────────────────────────
+    tts_appid: str           # 语音合成 的 APP ID（留空则复用 volc_appid）
+    tts_access_token: str
     tts_cluster: str
     tts_ws_url: str
     tts_voice_default: str   # voice_type，角色未指定时用
@@ -86,24 +93,30 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        volc_appid = _env("VOLC_APPID")
+        volc_token = _env("VOLC_ACCESS_TOKEN")
         return cls(
             port=_int_env("PORT", 8765),
 
             default_role_id=_env("DEFAULT_ROLE_ID", "trash_can"),
             roles_path=_env("ROLES_PATH", "roles.json"),
 
-            volc_appid=_env("VOLC_APPID"),
-            volc_token=_env("VOLC_ACCESS_TOKEN"),
+            volc_appid=volc_appid,
+            volc_token=volc_token,
 
+            asr_appid=_env("ASR_APPID", volc_appid),
+            asr_access_token=_env("ASR_ACCESS_TOKEN", volc_token),
             asr_resource_id=_env("ASR_RESOURCE_ID", "volc.bigasr.sauc.duration"),
             asr_ws_url=_env("ASR_WS_URL",
                             "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel"),
             asr_sample_rate=_int_env("ASR_SAMPLE_RATE", 16000),
 
+            tts_appid=_env("TTS_APPID", volc_appid),
+            tts_access_token=_env("TTS_ACCESS_TOKEN", volc_token),
             tts_cluster=_env("TTS_CLUSTER", "volcano_tts"),
             tts_ws_url=_env("TTS_WS_URL",
                             "wss://openspeech.bytedance.com/api/v1/tts/ws_binary"),
-            tts_voice_default=_env("TTS_VOICE_TYPE", "BV700_streaming"),
+            tts_voice_default=_env("TTS_VOICE_TYPE", "BV001_streaming"),
             tts_sample_rate=_int_env("TTS_SAMPLE_RATE", 24000),
             tts_speed_ratio=float(_env("TTS_SPEED_RATIO", "1.0") or "1.0"),
             tts_resource_id=_env("TTS_RESOURCE_ID", "volc.service_type.10029"),
@@ -124,8 +137,10 @@ class Settings:
     def sanity_check(self) -> list[str]:
         """返回缺失/可疑配置的提示列表（空列表表示 OK）。"""
         problems: list[str] = []
-        if not self.volc_appid or not self.volc_token:
-            problems.append("VOLC_APPID / VOLC_ACCESS_TOKEN 未配置，ASR 与 TTS 将不可用")
+        if not self.asr_appid or not self.asr_access_token:
+            problems.append("ASR_APPID / ASR_ACCESS_TOKEN（或 VOLC_APPID/VOLC_ACCESS_TOKEN）未配置，ASR 不可用")
+        if not self.tts_appid or not self.tts_access_token:
+            problems.append("TTS_APPID / TTS_ACCESS_TOKEN（或 VOLC_APPID/VOLC_ACCESS_TOKEN）未配置，TTS 不可用")
         if not self.ark_api_key:
             problems.append("ARK_API_KEY 未配置，LLM 将不可用")
         return problems

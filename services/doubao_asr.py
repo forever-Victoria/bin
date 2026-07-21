@@ -29,8 +29,8 @@ class DoubaoAsrService(ASRService):
     def __init__(self) -> None:
         self._url = settings.asr_ws_url
         self._headers = {
-            "X-Api-App-Key": settings.volc_appid,
-            "X-Api-Access-Key": settings.volc_token,
+            "X-Api-App-Key": settings.asr_appid,
+            "X-Api-Access-Key": settings.asr_access_token,
             "X-Api-Resource-Id": settings.asr_resource_id,
             "X-Api-Connect-Id": str(uuid.uuid4()),
         }
