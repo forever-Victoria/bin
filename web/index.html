@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>bin 语音网关 · 测试页</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    max-width: 680px; margin: 0 auto; padding: 24px 16px 64px;
+    line-height: 1.6;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #888; font-size: 13px; margin-bottom: 20px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  label { font-size: 13px; color: #aaa; width: 64px; }
+  input, select {
+    font: inherit; padding: 7px 10px; border: 1px solid #444; border-radius: 6px;
+    background: var(--bg,#1e1e1e); color: inherit;
+  }
+  input { flex: 1; min-width: 120px; }
+  button {
+    font: inherit; padding: 9px 16px; border: none; border-radius: 8px; cursor: pointer;
+    background: #2f6fed; color: #fff; transition: background .15s, transform .05s;
+  }
+  button:hover { background: #1f5fd0; }
+  button:active { transform: scale(.98); }
+  button:disabled { background: #555; cursor: not-allowed; }
+  button.secondary { background: #333; }
+  button.secondary:hover { background: #444; }
+  #talk {
+    width: 100%; padding: 26px; font-size: 17px; border-radius: 14px;
+    background: #2f6fed; user-select: none;
+  }
+  #talk.recording { background: #d23b3b; animation: pulse 1.2s infinite; }
+  #talk:disabled { background: #555; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.65} }
+  #status { font-size: 13px; margin: 14px 0; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:#888; margin-right:6px; vertical-align:middle; }
+  .dot.on { background:#3ec36b; }
+  .dot.busy { background:#d2a23b; }
+  #log {
+    margin-top: 8px; height: 260px; overflow-y: auto; padding: 10px 12px;
+    background: var(--bg,#1b1b1b); border: 1px solid #333; border-radius: 8px;
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px;
+  }
+  .log-line { margin: 2px 0; }
+  .log-line.user { color: #6cb6ff; }
+  .log-line.assistant { color: #7ee787; }
+  .log-line.sys { color: #888; }
+  .log-line.skip { color: #d2a23b; }
+  .log-line.err { color: #ff7b72; }
+  .hint { font-size: 12px; color: #777; margin-top: 6px; }
+</style>
+</head>
+<body>
+  <h1>bin 语音网关</h1>
+  <div class="sub">豆包分体（ASR → LLM → TTS）· 浏览器联调页 · 等价于一台 ESP32</div>
+
+  <div class="row">
+    <label>地址</label>
+    <input id="url" value="" placeholder="ws://host:8765" />
+  </div>
+  <div class="row">
+    <label>设备</label>
+    <input id="deviceId" value="web-001" />
+    <label style="width:auto">角色</label>
+    <input id="roleId" value="shanshan" style="flex:0 0 140px" />
+  </div>
+  <div class="row">
+    <button id="connect" class="secondary">连接</button>
+    <button id="disconnect" class="secondary" disabled>断开</button>
+  </div>
+
+  <div id="status"><span class="dot" id="dot"></span><span id="statusText">未连接</span></div>
+
+  <button id="talk" disabled>按住说话，松开发送</button>
+  <div class="hint">按下开始采集上传，松开提交识别。播放回复期间按钮自动禁用。</div>
+
+  <div id="log"></div>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+
+// 默认连本机同端口
+$("url").value = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/";
+
+const PCM_OUT_RATE = 24000;   // 下行播放采样率
+const PCM_IN_RATE  = 16000;   // 上行采集目标采样率
+
+let ws = null;
+let ready = false;
+let speaking = false;          // 收到 tts_start 后为 true
+
+// ── 上行采集 ─────────────────────────────────────────────
+let micCtx = null, micStream = null, sourceNode = null, procNode = null;
+
+async function startMic() {
+  micStream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+  });
+  micCtx = new AudioContext();   // 浏览器默认采样率（通常 48000）
+  sourceNode = micCtx.createMediaStreamSource(micStream);
+  // ScriptProcessor 已弃用但简单可靠，联调够用
+  procNode = micCtx.createScriptProcessor(4096, 1, 1);
+  sourceNode.connect(procNode);
+  procNode.connect(micCtx.destination);
+  procNode.onaudioprocess = onAudio;
+}
+
+function onAudio(e) {
+  if (!ws || ws.readyState !== 1) return;
+  const inRate = micCtx.sampleRate;
+  const input = e.inputBuffer.getChannelData(0);
+  const down = (inRate === PCM_IN_RATE) ? input : downsample(input, inRate, PCM_IN_RATE);
+  const pcm16 = floatTo16(down);
+  if (pcm16.buffer.byteLength > 0) ws.send(pcm16.buffer);
+}
+
+function downsample(buffer, inRate, outRate) {
+  if (outRate === inRate) return buffer;
+  const ratio = inRate / outRate;
+  const newLen = Math.round(buffer.length / ratio);
+  const result = new Float32Array(newLen);
+  let offRes = 0, offBuf = 0;
+  while (offRes < newLen && offBuf < buffer.length) {
+    const nextOff = Math.round((offRes + 1) * ratio);
+    let acc = 0, cnt = 0;
+    for (let i = offBuf; i < nextOff && i < buffer.length; i++) { acc += buffer[i]; cnt++; }
+    result[offRes] = cnt ? acc / cnt : 0;
+    offRes++; offBuf = nextOff;
+  }
+  return result;
+}
+
+function floatTo16(input) {
+  const out = new Int16Array(input.length);
+  for (let i = 0; i < input.length; i++) {
+    const s = Math.max(-1, Math.min(1, input[i]));
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  }
+  return out;
+}
+
+async function stopMic() {
+  try { if (procNode) { procNode.disconnect(); procNode.onaudioprocess = null; } } catch {}
+  try { if (sourceNode) sourceNode.disconnect(); } catch {}
+  try { if (micStream) micStream.getTracks().forEach((t) => t.stop()); } catch {}
+  try { if (micCtx) await micCtx.close(); } catch {}
+  micCtx = micStream = sourceNode = procNode = null;
+}
+
+// ── 下行播放（24k PCM 队列）──────────────────────────────
+let playCtx = null, nextPlayTime = 0;
+
+function ensurePlayCtx() {
+  if (!playCtx) {
+    playCtx = new AudioContext({ sampleRate: PCM_OUT_RATE });
+    nextPlayTime = 0;
+  }
+  if (playCtx.state === "suspended") playCtx.resume();
+}
+
+function playPcm(int16) {
+  ensurePlayCtx();
+  const f32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) f32[i] = int16[i] / 32768;
+  const buf = playCtx.createBuffer(1, f32.length, PCM_OUT_RATE);
+  buf.copyToChannel(f32, 0);
+  const src = playCtx.createBufferSource();
+  src.buffer = buf;
+  const now = playCtx.currentTime;
+  if (nextPlayTime < now) nextPlayTime = now;
+  src.connect(playCtx.destination);
+  src.start(nextPlayTime);
+  nextPlayTime += buf.duration;
+}
+
+// ── WebSocket ────────────────────────────────────────────
+function setStatus(text, kind) {
+  $("statusText").textContent = text;
+  const dot = $("dot");
+  dot.className = "dot" + (kind ? " " + kind : "");
+}
+
+function connect() {
+  const base = $("url").value.trim().replace(/\/$/, "");
+  const device = encodeURIComponent($("deviceId").value.trim() || "web-001");
+  const role = encodeURIComponent($("roleId").value.trim());
+  const full = `${base}/?device_id=${device}&role_id=${role}`;
+  log("连接 " + full, "sys");
+  ws = new WebSocket(full);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => { setStatus("已连接，等待 ready…", "busy"); };
+  ws.onmessage = onMessage;
+  ws.onclose = () => onClosed();
+  ws.onerror = () => log("WebSocket 错误", "err");
+}
+
+function disconnect() {
+  speaking = false;
+  if (ws) { try { ws.close(); } catch {} }
+}
+
+function onClosed() {
+  ws = null; ready = false; speaking = false;
+  setStatus("未连接");
+  $("connect").disabled = false;
+  $("disconnect").disabled = true;
+  $("talk").disabled = true;
+  $("talk").classList.remove("recording");
+  $("talk").textContent = "按住说话，松开发送";
+  stopMic();
+  log("已断开", "sys");
+}
+
+async function onMessage(ev) {
+  // 二进制：下行 24k PCM
+  if (ev.data instanceof ArrayBuffer) {
+    if (speaking) playPcm(new Int16Array(ev.data));
+    return;
+  }
+  let obj;
+  try { obj = JSON.parse(ev.data); } catch { return; }
+  switch (obj.type) {
+    case "ready":
+      ready = true;
+      setStatus(`就绪 · ${obj.role_name}（${obj.role_id}）`, "on");
+      $("talk").disabled = false;
+      log(`就绪 角色=${obj.role_name}（${obj.role_id}）`, "sys");
+      break;
+    case "role_changed":
+      log(`角色已切换：${obj.role_name}（${obj.role_id}）`, "sys");
+      break;
+    case "tts_start":
+      speaking = true;
+      nextPlayTime = 0;
+      ensurePlayCtx();
+      setStatus("播放中…", "busy");
+      $("talk").disabled = true;
+      break;
+    case "tts_end":
+      speaking = false;
+      setStatus(ready ? "就绪" : "已连接", ready ? "on" : "busy");
+      $("talk").disabled = !ready;
+      break;
+    case "transcript":
+      log(obj.text, obj.role);
+      break;
+    case "round_skip":
+      log("跳过：" + (obj.reason || ""), "skip");
+      break;
+    case "barge_in":
+      log("打断（barge_in）", "sys");
+      break;
+    case "error":
+      log("错误：" + (obj.message || ""), "err");
+      break;
+  }
+}
+
+function sendJson(obj) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
+
+// ── 按住说话 ──────────────────────────────────────────────
+async function talkStart() {
+  if (!ready) return;
+  sendJson({ type: "listen_start" });
+  $("talk").classList.add("recording");
+  $("talk").textContent = "松开发送…";
+  try {
+    await startMic();
+  } catch (e) {
+    log("麦克风无法启动：" + e.message, "err");
+    sendJson({ type: "cancel" });
+    $("talk").classList.remove("recording");
+    $("talk").textContent = "按住说话，松开发送";
+  }
+}
+
+async function talkEnd() {
+  if (!$("talk").classList.contains("recording")) return;
+  $("talk").classList.remove("recording");
+  $("talk").textContent = "按住说话，松开发送";
+  sendJson({ type: "listen_end" });
+  await stopMic();
+  setStatus("识别中…", "busy");
+}
+
+// ── 日志 ─────────────────────────────────────────────────
+function log(text, cls) {
+  const div = document.createElement("div");
+  div.className = "log-line " + (cls || "sys");
+  div.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+  const box = $("log");
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+// ── 绑定 ─────────────────────────────────────────────────
+$("connect").onclick = () => {
+  $("connect").disabled = true;
+  $("disconnect").disabled = false;
+  connect();
+};
+$("disconnect").onclick = disconnect;
+
+const talk = $("talk");
+talk.addEventListener("pointerdown", (e) => { e.preventDefault(); talkStart(); });
+talk.addEventListener("pointerup", (e) => { e.preventDefault(); talkEnd(); });
+talk.addEventListener("pointerleave", () => { if (talk.classList.contains("recording")) talkEnd(); });
+talk.addEventListener("pointercancel", () => { if (talk.classList.contains("recording")) talkEnd(); });
+
+log("页面就绪。点「连接」开始。", "sys");
+</script>
+</body>
+</html>
