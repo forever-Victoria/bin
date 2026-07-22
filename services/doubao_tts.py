@@ -13,6 +13,7 @@ MVP 选 V1：协议成熟、Python 示例多、可靠。支持预置音色（BVx
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import AsyncIterator
@@ -25,6 +26,8 @@ from .base import TTSService
 
 log = logging.getLogger("bin.tts")
 
+_TTS_RETRIES = 3
+
 
 class DoubaoTtsV1Service(TTSService):
     def __init__(self) -> None:
@@ -35,6 +38,26 @@ class DoubaoTtsV1Service(TTSService):
     async def synthesize(self, text: str, speaker: str) -> AsyncIterator[bytes]:
         if not text.strip():
             return
+        # 连豆包时 TLS 握手偶发 ConnectionResetError，重试即可
+        last_exc: Exception | None = None
+        for attempt in range(1, _TTS_RETRIES + 1):
+            yielded = False
+            try:
+                async for pcm in self._synthesize_once(text, speaker):
+                    yielded = True
+                    yield pcm
+                return
+            except (OSError, websockets.WebSocketException) as e:
+                last_exc = e
+                if yielded:
+                    # 已下发部分音频，重试会导致重复播放，直接上抛
+                    raise
+                log.warning("TTS 第 %d 次连接失败：%s，重试", attempt, type(e).__name__)
+                await asyncio.sleep(0.4 * attempt)
+        raise RuntimeError(
+            f"TTS 重试 {_TTS_RETRIES} 次仍失败：{type(last_exc).__name__}: {last_exc}")
+
+    async def _synthesize_once(self, text: str, speaker: str) -> AsyncIterator[bytes]:
         headers = {"Authorization": f"Bearer; {self._token}"}
         voice = speaker or settings.tts_voice_default
 

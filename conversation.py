@@ -131,10 +131,11 @@ class Conversation:
             await self._send_text(M.tts_end())
             self._log("本轮回复完成 → IDLE")
         except Exception as e:  # noqa: BLE001
-            self._log(f"处理异常: {e}")
+            what = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+            self._log(f"处理异常: {what}")
             log.exception("处理失败")
             try:
-                await self._send_text(M.error(f"处理失败: {e}"))
+                await self._send_text(M.error(f"处理失败: {what}"))
             except Exception:
                 pass
         finally:

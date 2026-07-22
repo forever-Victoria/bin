@@ -24,21 +24,40 @@ from .base import ASRService
 
 log = logging.getLogger("bin.asr")
 
+_ASR_RETRIES = 3
+
 
 class DoubaoAsrService(ASRService):
     def __init__(self) -> None:
         self._url = settings.asr_ws_url
-        self._headers = {
+
+    async def transcribe(self, audio_chunks: AsyncIterator[bytes]) -> str:
+        # 缓冲成列表，便于失败时重试（async 迭代器是一次性的）
+        chunks: list[bytes] = [c async for c in audio_chunks]
+        last_exc: Exception | None = None
+        for attempt in range(1, _ASR_RETRIES + 1):
+            try:
+                return await self._transcribe_once(self._aiter(chunks))
+            except (OSError, websockets.WebSocketException) as e:
+                last_exc = e
+                log.warning("ASR 第 %d 次失败：%s，重试", attempt, type(e).__name__)
+                await asyncio.sleep(0.4 * attempt)
+        raise RuntimeError(
+            f"ASR 重试 {_ASR_RETRIES} 次仍失败：{type(last_exc).__name__}: {last_exc}")
+
+    @staticmethod
+    async def _aiter(items: list[bytes]) -> AsyncIterator[bytes]:
+        for x in items:
+            yield x
+
+    async def _transcribe_once(self, audio_chunks: AsyncIterator[bytes]) -> str:
+        # 每次识别用独立连接与 Connect-Id，便于排错
+        headers = {
             "X-Api-App-Key": settings.asr_appid,
             "X-Api-Access-Key": settings.asr_access_token,
             "X-Api-Resource-Id": settings.asr_resource_id,
             "X-Api-Connect-Id": str(uuid.uuid4()),
         }
-
-    async def transcribe(self, audio_chunks: AsyncIterator[bytes]) -> str:
-        # 每次识别用独立连接与 Connect-Id，便于排错
-        headers = dict(self._headers)
-        headers["X-Api-Connect-Id"] = str(uuid.uuid4())
 
         async with websockets.connect(self._url, additional_headers=headers) as ws:
             payload = {
