@@ -33,6 +33,13 @@ async def lifespan(_app: FastAPI):
         "bin 网关已就绪 端口=%d 默认角色=%s barge_in=%s",
         settings.port, settings.default_role_id, settings.barge_in_enabled,
     )
+    if settings.barge_in_enabled:
+        log.info(
+            "全双工打断: RMS=%d 持续=%dms 预录=%dms",
+            settings.barge_in_rms_threshold,
+            settings.barge_in_hold_ms,
+            settings.barge_in_pre_roll_ms,
+        )
     log.info("可用角色: %s", ", ".join(r.id for r in role_registry.all()))
     log.info("连接示例: ws://<host>:%d?device_id=bin-001&role_id=shanshan", settings.port)
     yield

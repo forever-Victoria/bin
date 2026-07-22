@@ -115,8 +115,25 @@ async def _on_text(conv: Conversation, ws: WebSocket, text: str) -> None:
         await _handle_set_role(conv, ws, obj.get("role_id", ""))
     elif t == M.HEARTBEAT:
         pass
+    elif t == M.BARGE_CANDIDATE:
+        await conv.on_barge_candidate(_int_field(obj, "turn_id"))
+    elif t == M.BARGE_ACK:
+        await conv.on_barge_ack(_int_field(obj, "turn_id"))
+    elif t == M.PLAYBACK_PROGRESS:
+        await conv.on_playback_progress(
+            _int_field(obj, "turn_id"), _int_field(obj, "samples", -1)
+        )
+    elif t == M.PLAYBACK_COMPLETE:
+        await conv.on_playback_complete(_int_field(obj, "turn_id"))
     else:
         await ws.send_text(M.error(f"未知消息: {t}"))
+
+
+def _int_field(obj: dict, key: str, default: int = 0) -> int:
+    try:
+        return int(obj.get(key, default))
+    except (TypeError, ValueError):
+        return default
 
 
 async def _handle_set_role(conv: Conversation, ws: WebSocket, role_id: str) -> None:

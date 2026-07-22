@@ -47,6 +47,16 @@ def _int_env(key: str, default: int) -> int:
         return default
 
 
+def _float_env(key: str, default: float) -> float:
+    v = _env(key)
+    if v == "":
+        return default
+    try:
+        return float(v)
+    except ValueError:
+        return default
+
+
 @dataclass(frozen=True)
 class Settings:
     # ── 服务端口：设备 WebSocket 与测试网页共用一个端口 ──────────────────────
@@ -86,6 +96,13 @@ class Settings:
 
     # ── 行为 / 兼容 ljt ────────────────────────────────────────────────────
     barge_in_enabled: bool            # ready 里上报给设备
+    barge_in_rms_threshold: int       # 近端语音最低残差 RMS
+    barge_in_hold_ms: int             # 连续达到阈值多久才确认打断
+    barge_in_pre_roll_ms: int         # 打断触发前保留给 ASR 的音频
+    barge_in_echo_correlation: float  # 与下行 TTS 的相关性阈值
+    barge_in_echo_residual_rms: int   # 双讲时允许打断的最低残差 RMS
+    barge_in_min_residual_ratio: float
+    barge_in_reference_window_ms: int
     min_transcript_chars: int         # 有效话术最小字数
     transcript_wait_sec: int          # ASR 转写等待超时
     tts_chunk_ms: int                 # 下行音频分片
@@ -128,6 +145,13 @@ class Settings:
             llm_temperature=float(_env("LLM_TEMPERATURE", "0.8") or "0.8"),
 
             barge_in_enabled=_bool_env("BARGE_IN_ENABLED", False),
+            barge_in_rms_threshold=_int_env("BARGE_IN_RMS_THRESHOLD", 1800),
+            barge_in_hold_ms=_int_env("BARGE_IN_HOLD_MS", 80),
+            barge_in_pre_roll_ms=_int_env("BARGE_IN_PRE_ROLL_MS", 300),
+            barge_in_echo_correlation=_float_env("BARGE_IN_ECHO_CORRELATION", 0.62),
+            barge_in_echo_residual_rms=_int_env("BARGE_IN_ECHO_RESIDUAL_RMS", 600),
+            barge_in_min_residual_ratio=_float_env("BARGE_IN_MIN_RESIDUAL_RATIO", 0.45),
+            barge_in_reference_window_ms=_int_env("BARGE_IN_REFERENCE_WINDOW_MS", 1500),
             min_transcript_chars=_int_env("MIN_TRANSCRIPT_CHARS", 1),
             transcript_wait_sec=_int_env("TRANSCRIPT_WAIT_SEC", 12),
             tts_chunk_ms=_int_env("TTS_CHUNK_MS", 40),

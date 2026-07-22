@@ -49,16 +49,16 @@ def role_changed(role_id: str, role_name: str) -> str:
     return of(ROLE_CHANGED, role_id=role_id, role_name=role_name)
 
 
-def tts_start() -> str:
-    return of(TTS_START)
+def tts_start(turn_id: int | None = None) -> str:
+    return of(TTS_START, **({"turn_id": turn_id} if turn_id is not None else {}))
 
 
-def tts_end() -> str:
-    return of(TTS_END)
+def tts_end(turn_id: int | None = None) -> str:
+    return of(TTS_END, **({"turn_id": turn_id} if turn_id is not None else {}))
 
 
-def barge_in() -> str:
-    return of(BARGE_IN)
+def barge_in(turn_id: int | None = None) -> str:
+    return of(BARGE_IN, **({"turn_id": turn_id} if turn_id is not None else {}))
 
 
 def transcript(role: str, text: str) -> str:

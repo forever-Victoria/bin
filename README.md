@@ -77,10 +77,11 @@ bin 网关已就绪 端口=8765 默认角色=trash_can barge_in=False
 
 启动后浏览器打开 `http://<host>:8765/`：
 
-1. 填设备 ID、角色 ID，点「连接」
-2. 收到 `就绪` 后，「按住说话，松开发送」
-3. 说完松开 → 自动 ASR → LLM → TTS 播放
-4. 日志区显示转写、回复、跳过、错误
+1. 填设备 ID、角色 ID，点「连接」并允许麦克风权限
+2. 默认启用「免按键实时对话」，直接开口即可；页面本地 VAD 自动开始录音
+3. 静音 700ms 后自动提交 → ASR → LLM → TTS，无需按住按钮
+4. AI 播放时直接开口即可打断；页面会持续上传、停止旧播放并自动提交新一句
+5. 如需回退到原来的按键测试，取消勾选「免按键实时对话」
 
 > 先在网页测通语音链路，再上 ESP32 硬件。
 
@@ -125,7 +126,10 @@ ws://<host>:8765?device_id=bin-001&role_id=shanshan
 | `ARK_API_KEY` | — | 方舟 LLM Key |
 | `ARK_MODEL` | `doubao-seed-1-6-flash-250828` | 豆包 Model ID 或 `ep-xxx` |
 | `MIN_TRANSCRIPT_CHARS` | `1` | 有效话术最小字数 |
-| `BARGE_IN_ENABLED` | `false` | 全双工打断（MVP 未启用） |
+| `BARGE_IN_ENABLED` | `false` | 开启全双工打断，并通过 `ready.barge_in` 通知设备 |
+| `BARGE_IN_RMS_THRESHOLD` | `1800` | 回声消除后近端语音的最低 RMS |
+| `BARGE_IN_HOLD_MS` | `80` | 连续达到阈值多久才确认打断 |
+| `BARGE_IN_PRE_ROLL_MS` | `300` | 打断时补给新 ASR 会话的前置音频 |
 
 ## 服务实现（事实来自官方文档）
 
@@ -144,7 +148,7 @@ ASR/TTS 的二进制帧编解码见 `services/_volc.py`（4 字节头 + 序列�
 - [x] 浏览器测试页
 - [x] 半双工对话流程
 - [ ] TTS 升级 V3 双向流式（复刻 2.0 / 音色设计 / expressive / LLM 流式→TTS 流式低延迟）
-- [ ] 全双工 barge-in（服务端 VAD + `barge_in`，参考 `frames.InterruptionFrame` 与 ljt `BargeInDetector`）
+- [x] 全双工 barge-in（持续上行、TTS 回声相关性、pre-roll、取消 LLM/TTS、设备 ACK/播放进度握手）
 - [ ] CI/CD：git push 自动部署到服务器
 
 ## 说明

@@ -22,6 +22,7 @@
   }
   input::placeholder { color: #999; }
   input { flex: 1; min-width: 120px; }
+  input[type="checkbox"] { flex: 0 0 auto; min-width: 0; width: 18px; height: 18px; }
   button {
     font: inherit; padding: 9px 16px; border: none; border-radius: 8px; cursor: pointer;
     background: #2f6fed; color: #fff; transition: background .15s, transform .05s;
@@ -54,6 +55,9 @@
   .log-line.skip { color: #d2a23b; }
   .log-line.err { color: #ff7b72; }
   .hint { font-size: 12px; color: #777; margin-top: 6px; }
+  .meter { height: 7px; flex: 1; min-width: 120px; overflow: hidden; background: #333; border-radius: 5px; }
+  .meter > span { display: block; width: 0; height: 100%; background: #3ec36b; transition: width .08s; }
+  #rmsText { width: 78px; font: 12px ui-monospace, monospace; color: #888; }
 </style>
 </head>
 <body>
@@ -73,12 +77,20 @@
   <div class="row">
     <button id="connect" class="secondary">连接</button>
     <button id="disconnect" class="secondary" disabled>断开</button>
+    <input id="fullDuplex" type="checkbox" checked />
+    <label for="fullDuplex" style="width:auto">免按键实时对话</label>
+  </div>
+  <div class="row">
+    <label>VAD 阈值</label>
+    <input id="vadThreshold" type="number" value="600" min="50" max="10000" step="50" style="flex:0 0 90px;min-width:0" />
+    <div class="meter"><span id="levelBar"></span></div>
+    <span id="rmsText">RMS 0</span>
   </div>
 
   <div id="status"><span class="dot" id="dot"></span><span id="statusText">未连接</span></div>
 
   <button id="talk" disabled>按住说话，松开发送</button>
-  <div class="hint">按下开始采集上传，松开提交识别。播放回复期间按钮自动禁用。</div>
+  <div class="hint" id="talkHint">按下开始采集上传，松开提交识别。播放回复期间按钮自动禁用。</div>
 
   <div id="log"></div>
 
@@ -96,18 +108,30 @@ const PCM_IN_RATE  = 16000;   // 上行采集目标采样率
 let ws = null;
 let ready = false;
 let speaking = false;          // 收到 tts_start 后为 true
+let serverBargeIn = false;
+let conversationState = "disconnected"; // idle/listening/processing/speaking
+let autoHeardSpeech = false;
+let autoLoudMs = 0;
+let lastLoudAt = 0;
+let preRollChunks = [];
+let preRollBytes = 0;
+
+const AUTO_VAD_HOLD_MS = 80;
+const AUTO_SILENCE_MS = 700;
+const AUTO_PRE_ROLL_BYTES = PCM_IN_RATE * 2 * 300 / 1000;
 
 // ── 上行采集 ─────────────────────────────────────────────
 let micCtx = null, micStream = null, sourceNode = null, procNode = null;
 
 async function startMic() {
+  if (micStream) return;
   micStream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
   });
   micCtx = new AudioContext();   // 浏览器默认采样率（通常 48000）
   sourceNode = micCtx.createMediaStreamSource(micStream);
   // ScriptProcessor 已弃用但简单可靠，联调够用
-  procNode = micCtx.createScriptProcessor(4096, 1, 1);
+  procNode = micCtx.createScriptProcessor(2048, 1, 1);
   sourceNode.connect(procNode);
   procNode.connect(micCtx.destination);
   procNode.onaudioprocess = onAudio;
@@ -119,7 +143,87 @@ function onAudio(e) {
   const input = e.inputBuffer.getChannelData(0);
   const down = (inRate === PCM_IN_RATE) ? input : downsample(input, inRate, PCM_IN_RATE);
   const pcm16 = floatTo16(down);
-  if (pcm16.buffer.byteLength > 0) ws.send(pcm16.buffer);
+
+  let sum = 0;
+  for (let i = 0; i < pcm16.length; i++) sum += pcm16[i] * pcm16[i];
+  const rms = pcm16.length ? Math.sqrt(sum / pcm16.length) : 0;
+  const now = performance.now();
+  const frameMs = pcm16.length * 1000 / PCM_IN_RATE;
+  const threshold = Math.max(50, Number($("vadThreshold").value) || 600);
+  const loud = rms >= threshold;
+  updateLevelMeter(rms, threshold);
+
+  if (loud) {
+    lastLoudAt = now;
+    if (conversationState === "listening") autoHeardSpeech = true;
+  }
+
+  if (!$("fullDuplex").checked) {
+    if (pcm16.byteLength > 0) ws.send(pcm16.buffer);
+    return;
+  }
+
+  if (conversationState === "speaking") {
+    // 服务端用这一路连续音频做回声相关性和 barge-in 检测。
+    if (pcm16.byteLength > 0) ws.send(pcm16.buffer);
+    return;
+  }
+
+  if (conversationState === "listening") {
+    if (pcm16.byteLength > 0) ws.send(pcm16.buffer);
+    if (autoHeardSpeech && now - lastLoudAt >= AUTO_SILENCE_MS) finishAutoUtterance();
+    return;
+  }
+
+  if (conversationState !== "idle") {
+    clearPreRoll();
+    autoLoudMs = 0;
+    return;
+  }
+
+  rememberPreRoll(pcm16);
+  autoLoudMs = loud ? autoLoudMs + frameMs : 0;
+  if (autoLoudMs >= AUTO_VAD_HOLD_MS) {
+    conversationState = "listening";
+    autoHeardSpeech = true;
+    autoLoudMs = 0;
+    sendJson({ type: "listen_start" });
+    for (const chunk of preRollChunks) ws.send(chunk.buffer);
+    clearPreRoll();
+    setStatus("正在听你说话…", "busy");
+    log(`检测到开口（RMS ${Math.round(rms)}），自动 listen_start`, "sys");
+  }
+}
+
+function rememberPreRoll(pcm16) {
+  const copy = pcm16.slice();
+  preRollChunks.push(copy);
+  preRollBytes += copy.byteLength;
+  while (preRollBytes > AUTO_PRE_ROLL_BYTES && preRollChunks.length > 1) {
+    preRollBytes -= preRollChunks.shift().byteLength;
+  }
+}
+
+function clearPreRoll() {
+  preRollChunks = [];
+  preRollBytes = 0;
+}
+
+function finishAutoUtterance() {
+  if (conversationState !== "listening") return;
+  conversationState = "processing";
+  autoHeardSpeech = false;
+  autoLoudMs = 0;
+  sendJson({ type: "listen_end" });
+  setStatus("识别和思考中…", "busy");
+  log(`静音 ${AUTO_SILENCE_MS}ms，自动 listen_end`, "sys");
+}
+
+function updateLevelMeter(rms, threshold) {
+  const percent = Math.min(100, rms / Math.max(threshold * 2, 1) * 100);
+  $("levelBar").style.width = percent + "%";
+  $("levelBar").style.background = rms >= threshold ? "#d23b3b" : "#3ec36b";
+  $("rmsText").textContent = "RMS " + Math.round(rms);
 }
 
 function downsample(buffer, inRate, outRate) {
@@ -157,6 +261,11 @@ async function stopMic() {
 
 // ── 下行播放（24k PCM 队列）──────────────────────────────
 let playCtx = null, nextPlayTime = 0;
+let playSources = new Set();
+let playbackEpoch = 0;
+let playbackEnded = false;
+let playedSamples16k = 0;
+let activeTurnId = 0;
 
 function ensurePlayCtx() {
   if (!playCtx) {
@@ -177,8 +286,39 @@ function playPcm(int16) {
   const now = playCtx.currentTime;
   if (nextPlayTime < now) nextPlayTime = now;
   src.connect(playCtx.destination);
+  const epoch = playbackEpoch;
+  const samples16k = Math.round(int16.length * PCM_IN_RATE / PCM_OUT_RATE);
+  playSources.add(src);
+  src.onended = () => {
+    playSources.delete(src);
+    if (epoch !== playbackEpoch) return;
+    playedSamples16k += samples16k;
+    sendJson({ type: "playback_progress", turn_id: activeTurnId, samples: playedSamples16k });
+    finishPlaybackIfDrained();
+  };
   src.start(nextPlayTime);
   nextPlayTime += buf.duration;
+}
+
+function finishPlaybackIfDrained() {
+  if (!playbackEnded || playSources.size !== 0 || !speaking) return;
+  sendJson({ type: "playback_complete", turn_id: activeTurnId });
+  speaking = false;
+  conversationState = "idle";
+  autoHeardSpeech = false;
+  clearPreRoll();
+  setStatus(ready ? "等你说话…" : "已连接", ready ? "on" : "busy");
+  updateConversationControls();
+}
+
+function stopPlayback() {
+  playbackEpoch++;
+  for (const src of playSources) {
+    try { src.onended = null; src.stop(); } catch {}
+  }
+  playSources.clear();
+  nextPlayTime = playCtx ? playCtx.currentTime : 0;
+  playbackEnded = false;
 }
 
 // ── WebSocket ────────────────────────────────────────────
@@ -204,11 +344,18 @@ function connect() {
 
 function disconnect() {
   speaking = false;
+  conversationState = "disconnected";
+  stopPlayback();
   if (ws) { try { ws.close(); } catch {} }
 }
 
 function onClosed() {
-  ws = null; ready = false; speaking = false;
+  ws = null; ready = false; speaking = false; serverBargeIn = false;
+  conversationState = "disconnected";
+  autoHeardSpeech = false;
+  autoLoudMs = 0;
+  clearPreRoll();
+  stopPlayback();
   setStatus("未连接");
   $("connect").disabled = false;
   $("disconnect").disabled = true;
@@ -230,36 +377,66 @@ async function onMessage(ev) {
   switch (obj.type) {
     case "ready":
       ready = true;
-      setStatus(`就绪 · ${obj.role_name}（${obj.role_id}）`, "on");
-      $("talk").disabled = false;
-      log(`就绪 角色=${obj.role_name}（${obj.role_id}）`, "sys");
+      serverBargeIn = !!obj.barge_in;
+      conversationState = "idle";
+      setStatus(`等你说话… · ${obj.role_name}（${obj.role_id}）`, "on");
+      updateConversationControls();
+      log(`就绪 角色=${obj.role_name}（${obj.role_id}） barge_in=${serverBargeIn}`, "sys");
+      if ($("fullDuplex").checked) {
+        try { await startMic(); } catch (e) { log("麦克风无法启动：" + e.message, "err"); }
+      }
+      updateDuplexHint();
       break;
     case "role_changed":
       log(`角色已切换：${obj.role_name}（${obj.role_id}）`, "sys");
       break;
     case "tts_start":
       speaking = true;
+      conversationState = "speaking";
+      autoHeardSpeech = false;
+      clearPreRoll();
+      activeTurnId = Number(obj.turn_id || activeTurnId + 1);
+      playbackEpoch++;
+      playSources.clear();
+      playbackEnded = false;
+      playedSamples16k = 0;
       nextPlayTime = 0;
       ensurePlayCtx();
       setStatus("播放中…", "busy");
       $("talk").disabled = true;
       break;
     case "tts_end":
-      speaking = false;
-      setStatus(ready ? "就绪" : "已连接", ready ? "on" : "busy");
-      $("talk").disabled = !ready;
+      if (obj.turn_id && Number(obj.turn_id) !== activeTurnId) break;
+      playbackEnded = true;
+      finishPlaybackIfDrained();
       break;
     case "transcript":
       log(obj.text, obj.role);
       break;
     case "round_skip":
       log("跳过：" + (obj.reason || ""), "skip");
+      conversationState = "idle";
+      autoHeardSpeech = false;
+      setStatus("等你说话…", "on");
+      updateConversationControls();
       break;
     case "barge_in":
       log("打断（barge_in）", "sys");
+      stopPlayback();
+      speaking = false;
+      conversationState = "listening";
+      autoHeardSpeech = performance.now() - lastLoudAt < 500;
+      sendJson({ type: "barge_ack", turn_id: Number(obj.turn_id || activeTurnId) });
+      setStatus("正在听打断内容…", "busy");
+      try { await startMic(); } catch (e) { log("麦克风无法启动：" + e.message, "err"); }
       break;
     case "error":
       log("错误：" + (obj.message || ""), "err");
+      if (!speaking) {
+        conversationState = "idle";
+        setStatus("等你说话…", "on");
+        updateConversationControls();
+      }
       break;
   }
 }
@@ -270,7 +447,8 @@ function sendJson(obj) {
 
 // ── 按住说话 ──────────────────────────────────────────────
 async function talkStart() {
-  if (!ready) return;
+  if (!ready || $("fullDuplex").checked || conversationState !== "idle") return;
+  conversationState = "listening";
   sendJson({ type: "listen_start" });
   $("talk").classList.add("recording");
   $("talk").textContent = "松开发送…";
@@ -288,9 +466,24 @@ async function talkEnd() {
   if (!$("talk").classList.contains("recording")) return;
   $("talk").classList.remove("recording");
   $("talk").textContent = "按住说话，松开发送";
+  conversationState = "processing";
   sendJson({ type: "listen_end" });
   await stopMic();
   setStatus("识别中…", "busy");
+}
+
+function updateDuplexHint() {
+  const enabled = $("fullDuplex").checked;
+  $("talkHint").textContent = enabled
+    ? `免按键实时对话已开启：直接说话即可；静音 ${AUTO_SILENCE_MS}ms 自动提交，AI 播放时开口可直接打断。`
+    : "按下开始采集上传，松开提交识别。播放回复期间按钮自动禁用。";
+  updateConversationControls();
+}
+
+function updateConversationControls() {
+  const realtime = $("fullDuplex").checked;
+  $("talk").disabled = !ready || realtime || speaking;
+  $("talk").textContent = realtime ? "实时对话中（无需按键）" : "按住说话，松开发送";
 }
 
 // ── 日志 ─────────────────────────────────────────────────
@@ -310,6 +503,20 @@ $("connect").onclick = () => {
   connect();
 };
 $("disconnect").onclick = disconnect;
+$("fullDuplex").onchange = async () => {
+  updateDuplexHint();
+  if (!ready) return;
+  if ($("fullDuplex").checked) {
+    try { await startMic(); } catch (e) { log("麦克风无法启动：" + e.message, "err"); }
+  } else if (!$("talk").classList.contains("recording")) {
+    if (conversationState === "listening") sendJson({ type: "cancel" });
+    conversationState = "idle";
+    autoHeardSpeech = false;
+    autoLoudMs = 0;
+    clearPreRoll();
+    await stopMic();
+  }
+};
 
 const talk = $("talk");
 talk.addEventListener("pointerdown", (e) => { e.preventDefault(); talkStart(); });
@@ -318,6 +525,7 @@ talk.addEventListener("pointerleave", () => { if (talk.classList.contains("recor
 talk.addEventListener("pointercancel", () => { if (talk.classList.contains("recording")) talkEnd(); });
 
 log("页面就绪。点「连接」开始。", "sys");
+updateDuplexHint();
 </script>
 </body>
 </html>

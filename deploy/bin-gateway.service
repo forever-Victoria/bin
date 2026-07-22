@@ -1,0 +1,21 @@
+[Unit]
+Description=bin Doubao voice gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/bin-gateway
+EnvironmentFile=/root/bin-gateway/.env
+ExecStart=/root/bin-gateway/.venv/bin/python /root/bin-gateway/main.py
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+KillSignal=SIGINT
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

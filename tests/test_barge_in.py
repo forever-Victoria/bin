@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+import math
+import struct
+import unittest
+
+from barge_in import BargeInConfig, BargeInDetector
+
+
+FRAME_MS = 40
+
+
+def constant_frame(amplitude: int, duration_ms: int = FRAME_MS, rate: int = 16_000) -> bytes:
+    return struct.pack("<h", amplitude) * (rate * duration_ms // 1000)
+
+
+def sine_frame(
+    amplitude: int, frequency: int, duration_ms: int = FRAME_MS, rate: int = 16_000
+) -> bytes:
+    samples = [
+        round(amplitude * math.sin(2 * math.pi * frequency * i / rate))
+        for i in range(rate * duration_ms // 1000)
+    ]
+    return struct.pack(f"<{len(samples)}h", *samples)
+
+
+def mixed_frame(
+    amplitude1: int, frequency1: int, amplitude2: int, frequency2: int
+) -> bytes:
+    samples = [
+        round(
+            amplitude1 * math.sin(2 * math.pi * frequency1 * i / 16_000)
+            + amplitude2 * math.sin(2 * math.pi * frequency2 * i / 16_000)
+        )
+        for i in range(16_000 * FRAME_MS // 1000)
+    ]
+    return struct.pack(f"<{len(samples)}h", *samples)
+
+
+class BargeInDetectorTest(unittest.TestCase):
+    def detector(self, threshold: int = 1800, hold_ms: int = 120) -> BargeInDetector:
+        return BargeInDetector(
+            BargeInConfig(
+                enabled=True,
+                rms_threshold=threshold,
+                hold_ms=hold_ms,
+                pre_roll_ms=300,
+            )
+        )
+
+    def test_sustained_speech_triggers_after_hold(self) -> None:
+        detector = self.detector()
+        self.assertFalse(detector.accept(constant_frame(4000)).triggered)
+        self.assertFalse(detector.accept(constant_frame(4000)).triggered)
+        detection = detector.accept(constant_frame(4000))
+        self.assertTrue(detection.triggered)
+        self.assertEqual(4000, detection.rms)
+        self.assertEqual(3 * 16_000 * 2 * FRAME_MS // 1000, len(detection.captured_audio))
+
+    def test_quiet_frame_resets_hold(self) -> None:
+        detector = self.detector()
+        detector.accept(constant_frame(4000))
+        detector.accept(constant_frame(4000))
+        detector.accept(constant_frame(500))
+        self.assertFalse(detector.accept(constant_frame(4000)).triggered)
+        self.assertFalse(detector.accept(constant_frame(4000)).triggered)
+        self.assertTrue(detector.accept(constant_frame(4000)).triggered)
+
+    def test_correlated_playback_echo_does_not_trigger(self) -> None:
+        detector = self.detector(threshold=1300, hold_ms=80)
+        detector.remember_playback(sine_frame(4200, 440, duration_ms=1000, rate=24_000))
+        for _ in range(6):
+            detection = detector.accept(sine_frame(2600, 440))
+            self.assertFalse(detection.triggered)
+            self.assertTrue(detection.playback_echo)
+
+    def test_unrelated_near_end_speech_triggers_with_reference(self) -> None:
+        detector = self.detector(threshold=1300, hold_ms=80)
+        detector.remember_playback(sine_frame(4200, 440, duration_ms=1000, rate=24_000))
+        self.assertFalse(detector.accept(sine_frame(2600, 900)).triggered)
+        self.assertTrue(detector.accept(sine_frame(2600, 900)).triggered)
+
+    def test_double_talk_survives_echo_rejection(self) -> None:
+        detector = self.detector(threshold=600, hold_ms=80)
+        detector.remember_playback(sine_frame(4200, 440, duration_ms=1000, rate=24_000))
+        frame = mixed_frame(2200, 440, 1800, 900)
+        self.assertFalse(detector.accept(frame).triggered)
+        detection = detector.accept(frame)
+        self.assertGreater(detection.correlation, 0.5)
+        self.assertTrue(detection.triggered)
+
+
+if __name__ == "__main__":
+    unittest.main()
