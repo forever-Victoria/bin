@@ -9,12 +9,48 @@ from abc import ABC, abstractmethod
 from typing import AsyncIterator
 
 
-class ASRService(ABC):
-    """流式语音识别：喂入音频分片，返回完整转写文本。"""
+class ASRSession(ABC):
+    """流式 ASR 会话：边说边识别。
+
+    生命周期：start（建连+发元数据）→ feed（实时喂音频帧，可多次）→
+    finish（发结束包，取最终文本）→ close。
+    """
 
     @abstractmethod
-    async def transcribe(self, audio_chunks: AsyncIterator[bytes]) -> str:
+    async def start(self) -> None:
         ...
+
+    @abstractmethod
+    async def feed(self, pcm: bytes) -> None:
+        ...
+
+    @abstractmethod
+    async def finish(self) -> str:
+        ...
+
+    @abstractmethod
+    async def close(self) -> None:
+        ...
+
+
+class ASRService(ABC):
+    """语音识别服务。实时对话用 session() 拿流式会话。"""
+
+    @abstractmethod
+    def session(self) -> ASRSession:
+        ...
+
+    async def transcribe(self, audio_chunks: AsyncIterator[bytes]) -> str:
+        """批量识别（便捷封装）：内部用流式会话实现。"""
+        sess = self.session()
+        await sess.start()
+        try:
+            async for chunk in audio_chunks:
+                if chunk:
+                    await sess.feed(chunk)
+            return await sess.finish()
+        finally:
+            await sess.close()
 
 
 class LLMService(ABC):

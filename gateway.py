@@ -93,6 +93,7 @@ async def handle_device(ws: WebSocket, device_id: str, role_id: str | None) -> N
     except Exception as e:  # noqa: BLE001
         logger(f"连接异常: {e}")
     finally:
+        await conv.close()  # 关掉可能残留的实时 ASR 会话
         if _connections.get(device_id) is ws:
             _connections.pop(device_id, None)
         logger(f"断开 | 当前在线 {len(_connections)} 台")
