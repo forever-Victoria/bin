@@ -175,7 +175,11 @@ class ConversationBargeInTest(unittest.IsolatedAsyncioTestCase):
             llm=llm,
             tts=FakeTts(),
             barge_config=BargeInConfig(
-                enabled=True, rms_threshold=1800, hold_ms=80, pre_roll_ms=300
+                enabled=True,
+                rms_threshold=1800,
+                hold_ms=80,
+                pre_roll_ms=300,
+                startup_guard_ms=0,
             ),
         )
 

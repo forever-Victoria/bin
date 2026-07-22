@@ -45,8 +45,37 @@ class BargeInDetectorTest(unittest.TestCase):
                 rms_threshold=threshold,
                 hold_ms=hold_ms,
                 pre_roll_ms=300,
+                startup_guard_ms=0,
             )
         )
+
+    def test_startup_guard_uses_confirmed_playback_progress(self) -> None:
+        detector = BargeInDetector(
+            BargeInConfig(
+                enabled=True,
+                rms_threshold=1800,
+                hold_ms=80,
+                pre_roll_ms=300,
+                startup_guard_ms=600,
+            )
+        )
+        detector.remember_playback(
+            sine_frame(4200, 440, duration_ms=1000, rate=24_000)
+        )
+        loud = sine_frame(4000, 900)
+
+        detection = detector.accept(loud)
+        self.assertTrue(detection.startup_guard)
+        self.assertFalse(detection.triggered)
+
+        detector.update_playback_cursor(16_000 * 500 // 1000)
+        detection = detector.accept(loud)
+        self.assertTrue(detection.startup_guard)
+        self.assertFalse(detection.triggered)
+
+        detector.update_playback_cursor(16_000 * 600 // 1000)
+        self.assertFalse(detector.accept(loud).triggered)
+        self.assertTrue(detector.accept(loud).triggered)
 
     def test_sustained_speech_triggers_after_hold(self) -> None:
         detector = self.detector()

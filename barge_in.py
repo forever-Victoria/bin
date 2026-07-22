@@ -34,6 +34,7 @@ class BargeInConfig:
     echo_residual_rms: int = 600
     min_residual_ratio: float = 0.45
     reference_window_ms: int = 1500
+    startup_guard_ms: int = 600
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,7 @@ class Detection:
     delay_ms: int = -1
     captured_audio: bytes = b""
     playback_echo: bool = False
+    startup_guard: bool = False
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,9 @@ class BargeInDetector:
     def __init__(self, config: BargeInConfig) -> None:
         self.config = config
         self._hold_samples = max(1, SAMPLE_RATE * config.hold_ms // 1000)
+        self._startup_guard_samples = max(
+            0, SAMPLE_RATE * config.startup_guard_ms // 1000
+        )
         self._max_pre_roll_bytes = (
             SAMPLE_RATE * BYTES_PER_SAMPLE * config.pre_roll_ms // 1000
         )
@@ -106,6 +111,24 @@ class BargeInDetector:
         )
         echo_only = correlated and not residual_has_speech
 
+        # Hardware AEC and VAD can briefly report the first playback transient
+        # as near-end speech. Base this guard on confirmed device playback,
+        # rather than tts_start or downlink arrival, so network/TTS latency does
+        # not consume it before the loudspeaker actually starts.
+        startup_guard = self.startup_guard_active()
+        if startup_guard:
+            self._loud_samples = 0
+            self._remember_pre_roll(current)
+            return Detection(
+                rms=rms,
+                residual_rms=echo.residual_rms,
+                correlation=echo.correlation,
+                residual_ratio=ratio,
+                delay_ms=echo.delay_ms,
+                playback_echo=echo_only,
+                startup_guard=True,
+            )
+
         if echo_only:
             self._loud_samples = 0
             return Detection(
@@ -140,6 +163,14 @@ class BargeInDetector:
 
     def snapshot_pre_roll(self) -> bytes:
         return bytes(self._pre_roll)
+
+    def startup_guard_active(self) -> bool:
+        if self._startup_guard_samples <= 0:
+            return False
+        return (
+            self._playback_cursor is None
+            or self._playback_cursor < self._startup_guard_samples
+        )
 
     def remember_playback(self, pcm_24k: bytes) -> None:
         """Retain 24 kHz PCM as a 16 kHz echo reference (3 samples -> 2)."""

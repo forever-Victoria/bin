@@ -98,6 +98,7 @@ class Conversation:
             echo_residual_rms=settings.barge_in_echo_residual_rms,
             min_residual_ratio=settings.barge_in_min_residual_ratio,
             reference_window_ms=settings.barge_in_reference_window_ms,
+            startup_guard_ms=settings.barge_in_startup_guard_ms,
         )
         self._barge_config = config
         self._barge_detector = BargeInDetector(config)
@@ -189,6 +190,8 @@ class Conversation:
                 decision = (
                     "BARGE_IN"
                     if detection.triggered
+                    else "GUARD"
+                    if detection.startup_guard
                     else "ECHO"
                     if detection.playback_echo
                     else "WAIT"

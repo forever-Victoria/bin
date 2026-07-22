@@ -103,6 +103,7 @@ class Settings:
     barge_in_echo_residual_rms: int   # 双讲时允许打断的最低残差 RMS
     barge_in_min_residual_ratio: float
     barge_in_reference_window_ms: int
+    barge_in_startup_guard_ms: int   # TTS 实际起播后的防误打断窗口
     min_transcript_chars: int         # 有效话术最小字数
     transcript_wait_sec: int          # ASR 转写等待超时
     tts_chunk_ms: int                 # 下行音频分片
@@ -152,6 +153,7 @@ class Settings:
             barge_in_echo_residual_rms=_int_env("BARGE_IN_ECHO_RESIDUAL_RMS", 600),
             barge_in_min_residual_ratio=_float_env("BARGE_IN_MIN_RESIDUAL_RATIO", 0.45),
             barge_in_reference_window_ms=_int_env("BARGE_IN_REFERENCE_WINDOW_MS", 1500),
+            barge_in_startup_guard_ms=_int_env("BARGE_IN_STARTUP_GUARD_MS", 600),
             min_transcript_chars=_int_env("MIN_TRANSCRIPT_CHARS", 1),
             transcript_wait_sec=_int_env("TRANSCRIPT_WAIT_SEC", 12),
             tts_chunk_ms=_int_env("TTS_CHUNK_MS", 40),
