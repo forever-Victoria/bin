@@ -1,14 +1,18 @@
-"""豆包 LLM —— 火山方舟 Ark（OpenAI 兼容）。
+"""豆包 LLM —— 火山方舟 Ark（OpenAI 兼容），流式输出 token。
 
 事实（官方 docs 82379）：
   base_url = https://ark.cn-beijing.volces.com/api/v3
   鉴权 = Authorization: Bearer <ARK_API_KEY>
-  model  = doubao Model ID（如 doubao-seed-1-6-flash-250828）或 Endpoint ID（ep-xxx）
+  model  = doubao Model ID（如 doubao-seed-2-0-lite-260428）或 Endpoint ID（ep-xxx）
   流式 = stream=True，读 choices[0].delta.content
+
+流式输出的 token 由 conversation 按句切分后立刻送 TTS，首句即开始合成播放，
+不必等整段回复生成完——这是降低对话延迟的关键。
 """
 from __future__ import annotations
 
 import logging
+from typing import AsyncIterator
 
 from openai import AsyncOpenAI
 
@@ -28,18 +32,22 @@ class DoubaoLlmService(LLMService):
             base_url=settings.ark_base_url,
         )
 
-    async def reply(self, system: str, history: list[dict], user_text: str) -> str:
+    async def reply_stream(
+        self, system: str, history: list[dict], user_text: str
+    ) -> AsyncIterator[str]:
         messages: list[dict] = [{"role": "system", "content": system}]
         messages.extend(history[-MAX_HISTORY_TURNS * 2:])
         messages.append({"role": "user", "content": user_text})
 
-        resp = await self._client.chat.completions.create(
+        stream = await self._client.chat.completions.create(
             model=settings.ark_model,
             messages=messages,
             max_tokens=settings.llm_max_tokens,
             temperature=settings.llm_temperature,
-            stream=False,
+            stream=True,
         )
-        text = (resp.choices[0].message.content or "").strip()
-        log.info("LLM 回复: %s", text[:80])
-        return text
+        async for chunk in stream:
+            if chunk.choices:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    yield delta

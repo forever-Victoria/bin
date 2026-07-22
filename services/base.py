@@ -18,11 +18,18 @@ class ASRService(ABC):
 
 
 class LLMService(ABC):
-    """对话大模型：给定 system + 历史 + 用户文本，返回回复文本。"""
+    """对话大模型：流式产出回复 token（首句即合成，降低对话延迟）。"""
 
     @abstractmethod
-    async def reply(self, system: str, history: list[dict], user_text: str) -> str:
+    def reply_stream(self, system: str, history: list[dict], user_text: str) -> AsyncIterator[str]:
         ...
+
+    async def reply(self, system: str, history: list[dict], user_text: str) -> str:
+        """非流式便捷封装：聚合整段回复。"""
+        parts: list[str] = []
+        async for delta in self.reply_stream(system, history, user_text):
+            parts.append(delta)
+        return "".join(parts).strip()
 
 
 class TTSService(ABC):

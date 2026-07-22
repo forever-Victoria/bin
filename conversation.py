@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from enum import Enum
 from typing import AsyncIterator, Callable, Awaitable
 
@@ -20,6 +21,20 @@ log = logging.getLogger("bin.conv")
 
 # 16k/16bit/mono 下 200ms = 6400 字节（ASR 单包最优大小）
 ASR_FRAME_BYTES = 6400
+
+# 流式分句：LLM 一吐出完整句子就立刻送 TTS，不必等整段生成完（降首音延迟）
+_SENT_RE = re.compile(r"[。！？!?…\n]")
+_MAX_NO_PUNCT = 40  # 没有句末标点时，攒到此字数也先送合成，避免干等
+
+
+def _take_sentence(buf: str) -> tuple[str | None, str]:
+    """从 buf 取出第一个完整句子（含句末标点）；没有则返回 (None, buf)。"""
+    m = _SENT_RE.search(buf)
+    if m:
+        return buf[:m.end()], buf[m.end():]
+    if len(buf) >= _MAX_NO_PUNCT:
+        return buf, ""
+    return None, buf
 
 SendText = Callable[[str], Awaitable[None]]
 SendBytes = Callable[[bytes], Awaitable[None]]
@@ -117,17 +132,38 @@ class Conversation:
                 await self._send_text(M.round_skip("未识别到有效文字（可能是噪声）"))
                 return
 
-            reply = await self._llm.reply(self.role.instructions, self._history, text)
-            await self._send_text(M.transcript("assistant", reply))
-            self._log(f"助手: {reply}")
-            self._history.append({"role": "user", "content": text})
-            self._history.append({"role": "assistant", "content": reply})
-
+            # 先进入播放态并通知设备；随后 LLM 一吐出句子就立刻合成播放（流水线降延迟）
             async with self._lock:
                 self._phase = Phase.SPEAKING
             await self._send_text(M.tts_start())
-            async for pcm in self._tts.synthesize(reply, self.role.speaker):
-                await self._send_bytes(pcm)
+
+            buf = ""
+            full = ""
+            async for delta in self._llm.reply_stream(
+                self.role.instructions, self._history, text
+            ):
+                full += delta
+                buf += delta
+                # 已完成的句子立刻送 TTS，不等整段生成完
+                while True:
+                    sentence, buf = _take_sentence(buf)
+                    if sentence is None:
+                        break
+                    if sentence.strip():
+                        async for pcm in self._tts.synthesize(sentence, self.role.speaker):
+                            await self._send_bytes(pcm)
+
+            if full.strip():
+                await self._send_text(M.transcript("assistant", full.strip()))
+                self._log(f"助手: {full.strip()}")
+                self._history.append({"role": "user", "content": text})
+                self._history.append({"role": "assistant", "content": full.strip()})
+
+            # 收尾：最后一段没有句末标点的文本
+            if buf.strip():
+                async for pcm in self._tts.synthesize(buf, self.role.speaker):
+                    await self._send_bytes(pcm)
+
             await self._send_text(M.tts_end())
             self._log("本轮回复完成 → IDLE")
         except Exception as e:  # noqa: BLE001
