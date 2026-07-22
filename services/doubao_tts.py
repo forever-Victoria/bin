@@ -50,7 +50,6 @@ class DoubaoTtsV1Service(TTSService):
                 "encoding": "pcm",
                 "rate": settings.tts_sample_rate,
                 "speed_ratio": settings.tts_speed_ratio,
-                "volume": settings.tts_volume,
                 "pitch_ratio": 1.0,
             },
             "request": {
