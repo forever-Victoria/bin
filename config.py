@@ -108,7 +108,7 @@ class Settings:
             asr_access_token=_env("ASR_ACCESS_TOKEN", volc_token),
             asr_resource_id=_env("ASR_RESOURCE_ID", "volc.bigasr.sauc.duration"),
             asr_ws_url=_env("ASR_WS_URL",
-                            "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel"),
+                            "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"),
             asr_sample_rate=_int_env("ASR_SAMPLE_RATE", 16000),
 
             tts_appid=_env("TTS_APPID", volc_appid),
