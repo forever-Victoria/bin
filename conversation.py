@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from enum import Enum
 from typing import AsyncIterator, Callable, Awaitable
 
@@ -119,11 +120,15 @@ class Conversation:
             yield audio[i:i + ASR_FRAME_BYTES]
 
     async def _process(self) -> None:
+        t0 = time.monotonic()
+        t_asr = t_first_token = t_first_audio = None
         try:
             audio = b"".join(self._buffer)
             self._buffer.clear()
 
             text = await self._asr.transcribe(self._chunked(audio))
+            t_asr = time.monotonic()
+            self._log(f"[时延] ASR {t_asr - t0:.2f}s")
             if text:
                 await self._send_text(M.transcript("user", text))
                 self._log(f"用户: {text}")
@@ -142,6 +147,9 @@ class Conversation:
             async for delta in self._llm.reply_stream(
                 self.role.instructions, self._history, text
             ):
+                if t_first_token is None:
+                    t_first_token = time.monotonic()
+                    self._log(f"[时延] LLM 首 token {t_first_token - t_asr:.2f}s（ASR 完成后）")
                 full += delta
                 buf += delta
                 # 已完成的句子立刻送 TTS，不等整段生成完
@@ -151,6 +159,9 @@ class Conversation:
                         break
                     if sentence.strip():
                         async for pcm in self._tts.synthesize(sentence, self.role.speaker):
+                            if t_first_audio is None:
+                                t_first_audio = time.monotonic()
+                                self._log(f"[时延] 首音（松手→出声）{t_first_audio - t0:.2f}s")
                             await self._send_bytes(pcm)
 
             if full.strip():
@@ -165,6 +176,7 @@ class Conversation:
                     await self._send_bytes(pcm)
 
             await self._send_text(M.tts_end())
+            self._log(f"[时延] 总耗时 {time.monotonic() - t0:.2f}s")
             self._log("本轮回复完成 → IDLE")
         except Exception as e:  # noqa: BLE001
             what = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
