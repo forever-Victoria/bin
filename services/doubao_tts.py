@@ -89,6 +89,10 @@ class DoubaoTtsV1Service(TTSService):
             async for raw in ws:
                 frame = _volc.parse_server_frame(raw)
                 if frame.is_error:
+                    log.warning(
+                        "TTS 拒绝合成片段: code=%s message=%s text=%r",
+                        frame.error_code, frame.error_msg, text[:80],
+                    )
                     raise RuntimeError(
                         f"TTS 错误 {frame.error_code}: {frame.error_msg}")
                 # 只下发音频帧（PCM 24k/16bit/mono）

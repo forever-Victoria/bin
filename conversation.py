@@ -41,6 +41,11 @@ def _take_sentence(buf: str) -> tuple[str | None, str]:
     return None, buf
 
 
+def _has_speakable_text(text: str) -> bool:
+    """Return whether a TTS fragment contains at least one letter or digit."""
+    return any(char.isalnum() for char in text)
+
+
 SendText = Callable[[str], Awaitable[None]]
 SendBytes = Callable[[bytes], Awaitable[None]]
 LogFn = Callable[[str], None]
@@ -344,6 +349,12 @@ class Conversation:
     async def _speak_text(
         self, text: str, t0: float, first_audio: float | None
     ) -> float | None:
+        # A long unpunctuated LLM fragment may be flushed just before its
+        # trailing punctuation arrives. Do not submit that punctuation as a
+        # standalone synthesis request: Doubao rejects it with error 3011.
+        if not _has_speakable_text(text):
+            log.debug("跳过不可合成的纯符号片段: %r", text)
+            return first_audio
         async for pcm in self._tts.synthesize(text, self.role.speaker):
             if first_audio is None:
                 first_audio = time.monotonic()

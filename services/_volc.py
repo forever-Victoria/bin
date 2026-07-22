@@ -84,29 +84,43 @@ class ServerFrame:
 def parse_server_frame(buf: bytes) -> ServerFrame:
     if len(buf) < 4:
         raise ValueError(f"服务端帧过短: {len(buf)} bytes")
+    header_size = (buf[0] & 0x0F) * 4
+    if header_size < 4 or len(buf) < header_size:
+        raise ValueError(f"服务端帧头长度无效: {header_size} bytes")
     msg_type = buf[1] >> 4
     flags = buf[1] & 0x0F
     serial = buf[2] >> 4
     comp = buf[2] & 0x0F
 
     if msg_type == MT_ERROR:
-        if len(buf) < 12:
+        offset = header_size
+        if len(buf) < offset + 8:
             raise ValueError("错误帧不完整")
-        code = struct.unpack(">I", buf[4:8])[0]
-        msg_size = struct.unpack(">I", buf[8:12])[0]
-        msg = buf[12:12 + msg_size].decode("utf-8", errors="replace")
+        code = struct.unpack(">I", buf[offset:offset + 4])[0]
+        msg_size = struct.unpack(">I", buf[offset + 4:offset + 8])[0]
+        offset += 8
+        if len(buf) < offset + msg_size:
+            raise ValueError("错误帧消息不完整")
+        message = buf[offset:offset + msg_size]
+        if comp == COMP_GZIP and message:
+            message = gzip.decompress(message)
+        msg = message.decode("utf-8", errors="replace")
         return ServerFrame(msg_type, flags, serial, comp, None, False, b"",
                            code, msg)
 
-    offset = 4
+    offset = header_size
     sequence: int | None = None
     if flags & 0b0001:                       # 含 sequence number
+        if len(buf) < offset + 4:
+            raise ValueError("服务端帧缺少 sequence")
         sequence = struct.unpack(">i", buf[offset:offset + 4])[0]
         offset += 4
     if len(buf) < offset + 4:
         raise ValueError("服务端帧缺少 payload size")
     payload_size = struct.unpack(">I", buf[offset:offset + 4])[0]
     offset += 4
+    if len(buf) < offset + payload_size:
+        raise ValueError("服务端帧 payload 不完整")
     payload = buf[offset:offset + payload_size]
     if comp == COMP_GZIP and payload:
         payload = gzip.decompress(payload)

@@ -67,7 +67,61 @@ class FiniteLlm(LLMService):
         yield "完整回答。"
 
 
+class TrailingPunctuationLlm(LLMService):
+    async def reply_stream(self, system: str, history: list[dict], user_text: str):
+        del system, history, user_text
+        # The first delta reaches the no-punctuation flush limit. The next
+        # delta used to become a punctuation-only TTS request (error 3011).
+        yield "垃" * 40
+        yield "。"
+
+
+class RejectSymbolOnlyTts(TTSService):
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+
+    async def synthesize(self, text: str, speaker: str):
+        del speaker
+        if not any(char.isalnum() for char in text):
+            raise RuntimeError("TTS 错误 3011: invalid text")
+        self.texts.append(text)
+        yield struct.pack("<h", 800) * 480
+
+
 class ConversationBargeInTest(unittest.IsolatedAsyncioTestCase):
+    async def test_punctuation_only_fragment_is_not_sent_to_tts(self) -> None:
+        sent_text: list[dict] = []
+
+        async def send_text(payload: str) -> None:
+            sent_text.append(json.loads(payload))
+
+        tts = RejectSymbolOnlyTts()
+        conv = Conversation(
+            role=VoiceRole("test", "Test", "speaker", "be concise"),
+            send_text=send_text,
+            send_bytes=lambda _: asyncio.sleep(0),
+            logger=lambda _: None,
+            asr=FakeAsr(),
+            llm=TrailingPunctuationLlm(),
+            tts=tts,
+            barge_config=BargeInConfig(enabled=False),
+        )
+        await conv.on_listen_start()
+        await conv.on_listen_end()
+        for _ in range(20):
+            if conv.phase == Phase.IDLE:
+                break
+            await asyncio.sleep(0)
+
+        self.assertEqual(["垃" * 40], tts.texts)
+        self.assertFalse(any(item["type"] == "error" for item in sent_text))
+        transcript = next(
+            item for item in sent_text
+            if item["type"] == "transcript" and item["role"] == "assistant"
+        )
+        self.assertEqual("垃" * 40 + "。", transcript["text"])
+        await conv.close()
+
     async def test_full_duplex_turn_waits_for_real_playback_completion(self) -> None:
         sent_text: list[dict] = []
 
