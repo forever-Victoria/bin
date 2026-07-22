@@ -180,6 +180,7 @@ class ConversationBargeInTest(unittest.IsolatedAsyncioTestCase):
                 hold_ms=80,
                 pre_roll_ms=300,
                 startup_guard_ms=0,
+                warmup_ms=0,
             ),
         )
 

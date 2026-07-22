@@ -99,6 +99,9 @@ class Conversation:
             min_residual_ratio=settings.barge_in_min_residual_ratio,
             reference_window_ms=settings.barge_in_reference_window_ms,
             startup_guard_ms=settings.barge_in_startup_guard_ms,
+            warmup_ms=settings.barge_in_warmup_ms,
+            warmup_rms_threshold=settings.barge_in_warmup_rms_threshold,
+            warmup_hold_ms=settings.barge_in_warmup_hold_ms,
         )
         self._barge_config = config
         self._barge_detector = BargeInDetector(config)
@@ -200,11 +203,18 @@ class Conversation:
                     "打断诊断 "
                     f"raw_rms={detection.rms} residual_rms={detection.residual_rms} "
                     f"ratio={detection.residual_ratio:.2f} corr={detection.correlation:.3f} "
-                    f"delay={detection.delay_ms}ms decision={decision}"
+                    f"delay={detection.delay_ms}ms threshold={detection.effective_threshold} "
+                    f"hold={detection.required_hold_ms}ms warmup={int(detection.warmup)} "
+                    f"decision={decision}"
                 )
             if detection.triggered:
                 self._log(
-                    f"检测到用户打断，RMS={detection.rms}，"
+                    f"检测到用户打断，raw_rms={detection.rms}，"
+                    f"residual_rms={detection.residual_rms}，"
+                    f"ratio={detection.residual_ratio:.2f}，"
+                    f"corr={detection.correlation:.3f}，"
+                    f"threshold={detection.effective_threshold}，"
+                    f"hold={detection.required_hold_ms}ms，"
                     f"保留预录 {len(detection.captured_audio)} bytes"
                 )
                 await self._begin_barge_in(detection.captured_audio, "服务端检测")

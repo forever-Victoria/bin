@@ -35,6 +35,9 @@ class BargeInConfig:
     min_residual_ratio: float = 0.45
     reference_window_ms: int = 1500
     startup_guard_ms: int = 600
+    warmup_ms: int = 2500
+    warmup_rms_threshold: int = 3200
+    warmup_hold_ms: int = 160
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,9 @@ class Detection:
     captured_audio: bytes = b""
     playback_echo: bool = False
     startup_guard: bool = False
+    warmup: bool = False
+    effective_threshold: int = 0
+    required_hold_ms: int = 0
 
 
 @dataclass(frozen=True)
@@ -65,6 +71,10 @@ class BargeInDetector:
         self._hold_samples = max(1, SAMPLE_RATE * config.hold_ms // 1000)
         self._startup_guard_samples = max(
             0, SAMPLE_RATE * config.startup_guard_ms // 1000
+        )
+        self._warmup_samples = max(0, SAMPLE_RATE * config.warmup_ms // 1000)
+        self._warmup_hold_samples = max(
+            1, SAMPLE_RATE * config.warmup_hold_ms // 1000
         )
         self._max_pre_roll_bytes = (
             SAMPLE_RATE * BYTES_PER_SAMPLE * config.pre_roll_ms // 1000
@@ -99,8 +109,20 @@ class BargeInDetector:
         echo, residual = self._find_best_echo(samples, rms)
         ratio = echo.residual_rms / max(1, rms)
         correlated = echo.correlation >= self.config.echo_correlation_threshold
+        warmup = self.warmup_active()
+        effective_threshold = (
+            max(self.config.rms_threshold, self.config.warmup_rms_threshold)
+            if warmup
+            else self.config.rms_threshold
+        )
+        required_hold_samples = (
+            self._warmup_hold_samples if warmup else self._hold_samples
+        )
+        required_hold_ms = (
+            self.config.warmup_hold_ms if warmup else self.config.hold_ms
+        )
         residual_has_speech = (
-            echo.residual_rms >= self.config.rms_threshold
+            echo.residual_rms >= effective_threshold
             and (
                 not correlated
                 or (
@@ -127,6 +149,9 @@ class BargeInDetector:
                 delay_ms=echo.delay_ms,
                 playback_echo=echo_only,
                 startup_guard=True,
+                warmup=warmup,
+                effective_threshold=effective_threshold,
+                required_hold_ms=required_hold_ms,
             )
 
         if echo_only:
@@ -138,6 +163,9 @@ class BargeInDetector:
                 residual_ratio=ratio,
                 delay_ms=echo.delay_ms,
                 playback_echo=True,
+                warmup=warmup,
+                effective_threshold=effective_threshold,
+                required_hold_ms=required_hold_ms,
             )
 
         # Preserve the original hardware-AEC microphone audio for ASR.  The
@@ -148,7 +176,7 @@ class BargeInDetector:
         else:
             self._loud_samples = 0
 
-        triggered = self._loud_samples >= self._hold_samples
+        triggered = self._loud_samples >= required_hold_samples
         if triggered:
             self._triggered = True
         return Detection(
@@ -159,6 +187,9 @@ class BargeInDetector:
             residual_ratio=ratio,
             delay_ms=echo.delay_ms,
             captured_audio=bytes(self._pre_roll) if triggered else b"",
+            warmup=warmup,
+            effective_threshold=effective_threshold,
+            required_hold_ms=required_hold_ms,
         )
 
     def snapshot_pre_roll(self) -> bytes:
@@ -170,6 +201,14 @@ class BargeInDetector:
         return (
             self._playback_cursor is None
             or self._playback_cursor < self._startup_guard_samples
+        )
+
+    def warmup_active(self) -> bool:
+        if self._warmup_samples <= 0:
+            return False
+        return (
+            self._playback_cursor is None
+            or self._playback_cursor < self._warmup_samples
         )
 
     def remember_playback(self, pcm_24k: bytes) -> None:

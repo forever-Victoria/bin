@@ -46,6 +46,7 @@ class BargeInDetectorTest(unittest.TestCase):
                 hold_ms=hold_ms,
                 pre_roll_ms=300,
                 startup_guard_ms=0,
+                warmup_ms=0,
             )
         )
 
@@ -57,6 +58,7 @@ class BargeInDetectorTest(unittest.TestCase):
                 hold_ms=80,
                 pre_roll_ms=300,
                 startup_guard_ms=600,
+                warmup_ms=0,
             )
         )
         detector.remember_playback(
@@ -76,6 +78,35 @@ class BargeInDetectorTest(unittest.TestCase):
         detector.update_playback_cursor(16_000 * 600 // 1000)
         self.assertFalse(detector.accept(loud).triggered)
         self.assertTrue(detector.accept(loud).triggered)
+
+    def test_warmup_uses_stricter_threshold_and_hold(self) -> None:
+        detector = BargeInDetector(
+            BargeInConfig(
+                enabled=True,
+                rms_threshold=1800,
+                hold_ms=80,
+                pre_roll_ms=300,
+                startup_guard_ms=0,
+                warmup_ms=2500,
+                warmup_rms_threshold=3200,
+                warmup_hold_ms=160,
+            )
+        )
+        detector.remember_playback(
+            sine_frame(4200, 440, duration_ms=3000, rate=24_000)
+        )
+        detector.update_playback_cursor(16_000)
+
+        for _ in range(4):
+            detection = detector.accept(constant_frame(3000))
+            self.assertFalse(detection.triggered)
+            self.assertTrue(detection.warmup)
+            self.assertEqual(3200, detection.effective_threshold)
+            self.assertEqual(160, detection.required_hold_ms)
+
+        for _ in range(3):
+            self.assertFalse(detector.accept(constant_frame(4000)).triggered)
+        self.assertTrue(detector.accept(constant_frame(4000)).triggered)
 
     def test_sustained_speech_triggers_after_hold(self) -> None:
         detector = self.detector()

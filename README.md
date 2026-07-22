@@ -131,6 +131,9 @@ ws://<host>:8765?device_id=bin-001&role_id=shanshan
 | `BARGE_IN_HOLD_MS` | `80` | 连续达到阈值多久才确认打断 |
 | `BARGE_IN_PRE_ROLL_MS` | `300` | 打断时补给新 ASR 会话的前置音频 |
 | `BARGE_IN_STARTUP_GUARD_MS` | `600` | TTS 实际起播后的防误打断窗口（期间仍上传并保留预录） |
+| `BARGE_IN_WARMUP_MS` | `2500` | TTS 起播后的 AEC/VAD 收敛期 |
+| `BARGE_IN_WARMUP_RMS_THRESHOLD` | `3200` | 收敛期内使用的残差 RMS 门槛 |
+| `BARGE_IN_WARMUP_HOLD_MS` | `160` | 收敛期内确认打断所需持续时间 |
 
 ## 服务实现（事实来自官方文档）
 
