@@ -45,6 +45,9 @@ class DoubaoLlmService(LLMService):
             max_tokens=settings.llm_max_tokens,
             temperature=settings.llm_temperature,
             stream=True,
+            # 关闭豆包 seed 系列的「深度思考」：否则模型会先无声推理数秒才吐第一个字，
+            # 语音对话首音延迟会飙到 8s+。语音场景要快，不要思考。
+            extra_body={"thinking": {"type": "disabled"}},
         )
         async for chunk in stream:
             if chunk.choices:
