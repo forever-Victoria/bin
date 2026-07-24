@@ -114,7 +114,7 @@ async def _on_text(conv: Conversation, ws: WebSocket, text: str) -> None:
     elif t == M.SET_ROLE:
         await _handle_set_role(conv, ws, obj.get("role_id", ""))
     elif t == M.HEARTBEAT:
-        pass
+        await ws.send_text(M.heartbeat())
     elif t == M.BARGE_CANDIDATE:
         await conv.on_barge_candidate(_int_field(obj, "turn_id"))
     elif t == M.BARGE_ACK:

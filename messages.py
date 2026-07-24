@@ -49,6 +49,10 @@ def role_changed(role_id: str, role_name: str) -> str:
     return of(ROLE_CHANGED, role_id=role_id, role_name=role_name)
 
 
+def heartbeat() -> str:
+    return of(HEARTBEAT)
+
+
 def tts_start(turn_id: int | None = None) -> str:
     return of(TTS_START, **({"turn_id": turn_id} if turn_id is not None else {}))
 
