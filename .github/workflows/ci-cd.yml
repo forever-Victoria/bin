@@ -69,6 +69,23 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Export exact image for direct deployment
+        if: vars.DEPLOY_ENABLED == 'true'
+        shell: bash
+        run: |
+          docker pull "${{ steps.image-name.outputs.image }}:${{ github.sha }}"
+          docker save "${{ steps.image-name.outputs.image }}:${{ github.sha }}" |
+            gzip -1 > bin-gateway-image.tar.gz
+
+      - name: Upload deployment image artifact
+        if: vars.DEPLOY_ENABLED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-gateway-image-${{ github.sha }}
+          path: bin-gateway-image.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+
   deploy:
     if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
     needs: image
@@ -84,6 +101,12 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Download exact image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bin-gateway-image-${{ github.sha }}
+          path: /tmp/bin-gateway-image
+
       - name: Configure SSH
         shell: bash
         run: |
@@ -95,23 +118,18 @@ jobs:
       - name: Upload production Compose file
         shell: bash
         run: |
-          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH'"
+          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "mkdir -p '$DEPLOY_PATH/releases'"
           scp -P "$DEPLOY_PORT" deploy/compose.prod.yaml \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/compose.yaml"
-
-      - name: Log server in to GHCR
-        shell: bash
-        run: |
-          printf '%s' "${{ secrets.GHCR_READ_TOKEN }}" |
-            ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-              "docker login ghcr.io -u '${{ secrets.GHCR_USER }}' --password-stdin"
+          scp -P "$DEPLOY_PORT" deploy/deploy.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/deploy.sh"
+          scp -P "$DEPLOY_PORT" /tmp/bin-gateway-image/bin-gateway-image.tar.gz \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/releases/${GITHUB_SHA}.tar.gz"
 
       - name: Deploy exact commit image
         shell: bash
         run: |
           ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "cd '$DEPLOY_PATH' &&
-             export BIN_GATEWAY_IMAGE='$IMAGE' &&
-             docker compose -f compose.yaml pull &&
-             docker compose -f compose.yaml up -d --remove-orphans &&
-             docker compose -f compose.yaml ps"
+            "chmod 700 '$DEPLOY_PATH/deploy.sh' &&
+             '$DEPLOY_PATH/deploy.sh' '$IMAGE' '$DEPLOY_PATH' '$DEPLOY_PATH/releases/${GITHUB_SHA}.tar.gz'"
