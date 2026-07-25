@@ -27,16 +27,16 @@ CORRELATION_DELAY_STRIDE = 40
 @dataclass(frozen=True)
 class BargeInConfig:
     enabled: bool = False
-    rms_threshold: int = 1800
+    rms_threshold: int = 40
     hold_ms: int = 80
     pre_roll_ms: int = 300
     echo_correlation_threshold: float = 0.62
-    echo_residual_rms: int = 600
+    echo_residual_rms: int = 40
     min_residual_ratio: float = 0.45
     reference_window_ms: int = 1500
     startup_guard_ms: int = 600
     warmup_ms: int = 2500
-    warmup_rms_threshold: int = 3200
+    warmup_rms_threshold: int = 60
     warmup_hold_ms: int = 160
 
 

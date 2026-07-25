@@ -52,6 +52,11 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="bin voice gateway", lifespan=lifespan)
 
 
+@app.get("/healthz")
+async def healthz() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 @app.get("/")
 async def index() -> HTMLResponse:
     html_path = Path(__file__).parent / "web" / "index.html"

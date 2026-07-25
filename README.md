@@ -73,6 +73,20 @@ bin 网关已就绪 端口=8765 默认角色=trash_can barge_in=False
 连接示例: ws://<host>:8765?device_id=bin-001&role_id=shanshan
 ```
 
+## Docker 与 CI/CD
+
+本地已提供 `Dockerfile` 和 `compose.yaml`：
+
+```bash
+docker compose up -d --build
+docker compose ps
+```
+
+`main` 分支还提供 GitHub Actions 流水线，可自动测试、构建 GHCR 镜像，并在显式
+开启部署变量后通过 SSH 更新服务器。真实 `.env` 不会进入镜像或 Git。
+
+完整配置和回滚方法见 [`deploy/DOCKER_CICD.md`](deploy/DOCKER_CICD.md)。
+
 ## 浏览器测试页
 
 启动后浏览器打开 `http://<host>:8765/`：
@@ -127,12 +141,12 @@ ws://<host>:8765?device_id=bin-001&role_id=shanshan
 | `ARK_MODEL` | `doubao-seed-1-6-flash-250828` | 豆包 Model ID 或 `ep-xxx` |
 | `MIN_TRANSCRIPT_CHARS` | `1` | 有效话术最小字数 |
 | `BARGE_IN_ENABLED` | `false` | 开启全双工打断，并通过 `ready.barge_in` 通知设备 |
-| `BARGE_IN_RMS_THRESHOLD` | `1800` | 回声消除后近端语音的最低 RMS |
+| `BARGE_IN_RMS_THRESHOLD` | `40` | 按 A-59F 远场打断实测标定的回声消除后近端语音最低 RMS |
 | `BARGE_IN_HOLD_MS` | `80` | 连续达到阈值多久才确认打断 |
 | `BARGE_IN_PRE_ROLL_MS` | `300` | 打断时补给新 ASR 会话的前置音频 |
 | `BARGE_IN_STARTUP_GUARD_MS` | `600` | TTS 实际起播后的防误打断窗口（期间仍上传并保留预录） |
 | `BARGE_IN_WARMUP_MS` | `2500` | TTS 起播后的 AEC/VAD 收敛期 |
-| `BARGE_IN_WARMUP_RMS_THRESHOLD` | `3200` | 收敛期内使用的残差 RMS 门槛 |
+| `BARGE_IN_WARMUP_RMS_THRESHOLD` | `60` | 按 A-59F 远场打断实测标定的收敛期残差 RMS 门槛 |
 | `BARGE_IN_WARMUP_HOLD_MS` | `160` | 收敛期内确认打断所需持续时间 |
 
 ## 服务实现（事实来自官方文档）

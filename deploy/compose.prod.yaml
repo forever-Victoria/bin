@@ -1,0 +1,27 @@
+services:
+  bin-gateway:
+    image: ${BIN_GATEWAY_IMAGE:?BIN_GATEWAY_IMAGE is required}
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-8767}:${PORT:-8767}"
+    init: true
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.getenv('PORT', '8767') + '/healthz', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    stop_grace_period: 20s
