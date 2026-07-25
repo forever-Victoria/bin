@@ -9,9 +9,11 @@
 
 1. 每次 PR/推送运行 Python 自动测试；
 2. `main` 分支测试通过后构建镜像，推送到 GitHub Container Registry（GHCR）；
-3. 只有仓库变量 `DEPLOY_ENABLED=true` 时，才通过 SSH 更新生产服务器。
+3. 只有仓库变量 `DEPLOY_ENABLED=true` 时，才把精确提交镜像压缩后通过 SSH
+   直传生产服务器，并执行健康检查和失败回滚。
 
 第三步使用提交 SHA 对应的精确镜像标签，便于回滚，不会部署来源不明的 `latest`。
+服务器无需访问 GHCR 或 Docker Hub，适用于国内服务器访问海外镜像仓库不稳定的情况。
 
 ## 本地 Docker 运行
 
@@ -41,22 +43,22 @@ docker compose down
 
 ## 生产服务器首次准备
 
-服务器需要安装 Docker Engine 与 Docker Compose v2。以下路径与流水线默认值一致：
+服务器需要安装 Docker Engine 与 Docker Compose v2。当前生产服务器使用：
 
 ```bash
-sudo mkdir -p /opt/bin-gateway
-sudo chown "$USER":"$USER" /opt/bin-gateway
-cd /opt/bin-gateway
+sudo mkdir -p /home/admin/bin-gateway
+sudo chown admin:admin /home/admin/bin-gateway
+cd /home/admin/bin-gateway
 ```
 
-把 `deploy/.env.server.example` 复制为服务器上的 `/opt/bin-gateway/.env`，填写真实
+把 `deploy/.env.server.example` 复制为服务器上的 `/home/admin/bin-gateway/.env`，填写真实
 凭证，并限制权限：
 
 ```bash
-chmod 600 /opt/bin-gateway/.env
+chmod 600 /home/admin/bin-gateway/.env
 ```
 
-流水线只上传 `compose.yaml`，不会上传或覆盖服务器 `.env`。
+流水线只上传 Compose 文件、部署脚本和镜像压缩包，不会上传或覆盖服务器 `.env`。
 
 ## 当前仓库托管状态
 
@@ -87,30 +89,25 @@ Compose 和测试命令无需改变。
 | `DEPLOY_HOST` | 服务器 IP 或域名 |
 | `DEPLOY_USER` | SSH 用户 |
 | `DEPLOY_SSH_KEY` | 对应服务器公钥的私钥 |
-| `GHCR_USER` | 能读取 GHCR 镜像的 GitHub 用户 |
-| `GHCR_READ_TOKEN` | 具有 `read:packages` 权限的 GitHub Token |
 
 ### Variables
 
 | 名称 | 示例 | 用途 |
 |---|---|---|
 | `DEPLOY_ENABLED` | `true` | 开启自动部署；未设置时只测试和构建镜像 |
-| `DEPLOY_PATH` | `/opt/bin-gateway` | 服务器部署目录 |
+| `DEPLOY_PATH` | `/home/admin/bin-gateway` | 服务器部署目录 |
 | `DEPLOY_PORT` | `22` | SSH 端口 |
 
 建议在 GitHub 创建名为 `production` 的 Environment，并为生产部署开启人工审批。
 
 ## 手动部署与回滚
 
-服务器上可手动部署任意镜像：
+流水线调用 `deploy/deploy.sh` 完成以下操作：
 
-```bash
-cd /opt/bin-gateway
-export BIN_GATEWAY_IMAGE=ghcr.io/<账号>/<仓库>:<完整提交SHA>
-docker compose -f compose.yaml pull
-docker compose -f compose.yaml up -d --remove-orphans
-docker compose -f compose.yaml ps
-```
+1. 从压缩包加载精确提交镜像；
+2. 记录当前运行镜像；
+3. 使用新镜像重建容器；
+4. 最多等待 60 秒检查 `/healthz`；
+5. 检查失败时自动恢复上一镜像。
 
-回滚时把 `BIN_GATEWAY_IMAGE` 换成上一个成功提交的 SHA，重复上述命令即可。服务器
-`.env` 与镜像相互独立，因此回滚镜像不会丢失语音服务凭证和现场阈值。
+服务器 `.env` 与镜像相互独立，因此自动回滚镜像不会丢失语音服务凭证和现场阈值。
