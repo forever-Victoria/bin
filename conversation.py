@@ -48,6 +48,25 @@ def _has_speakable_text(text: str) -> bool:
     return any(char.isalnum() for char in text)
 
 
+def _amplify_pcm16(pcm: bytes, gain: float) -> bytes:
+    """Apply saturated gain to little-endian PCM16 without wrapping samples."""
+    if gain == 1.0 or not pcm:
+        return pcm
+    if len(pcm) % 2:
+        raise ValueError("PCM16 payload length must be even")
+
+    samples = array("h")
+    samples.frombytes(pcm)
+    if sys.byteorder != "little":
+        samples.byteswap()
+    for index, sample in enumerate(samples):
+        amplified = round(sample * gain)
+        samples[index] = max(-32768, min(32767, amplified))
+    if sys.byteorder != "little":
+        samples.byteswap()
+    return samples.tobytes()
+
+
 class _Pcm16RateConverter:
     """Bounded streaming converter used for negotiated 24 kHz -> 16 kHz PCM."""
 
@@ -113,6 +132,7 @@ class Conversation:
         tts: TTSService,
         barge_config: BargeInConfig | None = None,
         downlink_sample_rate: int | None = None,
+        asr_input_gain: float | None = None,
     ) -> None:
         self.role = role
         self._send_text = send_text
@@ -121,6 +141,9 @@ class Conversation:
         self._asr = asr
         self._llm = llm
         self._tts = tts
+        self._asr_input_gain = (
+            settings.asr_input_gain if asr_input_gain is None else max(0.0, asr_input_gain)
+        )
         self._downlink_sample_rate = downlink_sample_rate or settings.tts_sample_rate
         self._downlink_converter = _Pcm16RateConverter(
             settings.tts_sample_rate, self._downlink_sample_rate
@@ -297,7 +320,7 @@ class Conversation:
         session = self._asr_sess
         if session is not None:
             try:
-                await session.feed(pcm)
+                await session.feed(_amplify_pcm16(pcm, self._asr_input_gain))
             except Exception as exc:  # noqa: BLE001
                 log.debug("ASR feed 失败: %s", exc)
 
@@ -515,7 +538,9 @@ class Conversation:
         session = self._asr_sess
         if elapsed_ms <= _MAX_SAFE_BARGE_ACK_MS and retained and session is not None:
             try:
-                await session.feed(retained)
+                await session.feed(
+                    _amplify_pcm16(retained, self._asr_input_gain)
+                )
                 self._log(
                     f"打断确认 {acknowledgement} 延迟={elapsed_ms}ms，"
                     f"保留 {len(retained)} bytes 音频"

@@ -6,7 +6,7 @@ import struct
 import unittest
 
 from barge_in import BargeInConfig
-from conversation import Conversation, Phase, _Pcm16RateConverter
+from conversation import Conversation, Phase, _Pcm16RateConverter, _amplify_pcm16
 from roles import VoiceRole
 from services.base import ASRService, ASRSession, LLMService, TTSService
 
@@ -89,6 +89,40 @@ class RejectSymbolOnlyTts(TTSService):
 
 
 class ConversationBargeInTest(unittest.IsolatedAsyncioTestCase):
+    def test_pcm16_gain_saturates_without_wrapping(self) -> None:
+        source = struct.pack("<hhhh", 20_000, -20_000, 100, -100)
+
+        amplified = _amplify_pcm16(source, 2.0)
+
+        self.assertEqual(
+            (32_767, -32_768, 200, -200),
+            struct.unpack("<hhhh", amplified),
+        )
+
+    async def test_listening_audio_is_amplified_only_when_fed_to_asr(self) -> None:
+        asr = FakeAsr()
+        conv = Conversation(
+            role=VoiceRole("test", "Test", "speaker", "be concise"),
+            send_text=lambda _: asyncio.sleep(0),
+            send_bytes=lambda _: asyncio.sleep(0),
+            logger=lambda _: None,
+            asr=asr,
+            llm=FiniteLlm(),
+            tts=FakeTts(),
+            barge_config=BargeInConfig(enabled=False),
+            asr_input_gain=2.0,
+        )
+        source = struct.pack("<hhhh", 20_000, -20_000, 100, -100)
+
+        await conv.on_listen_start()
+        await conv.on_audio(source)
+
+        self.assertEqual(
+            (32_767, -32_768, 200, -200),
+            struct.unpack("<hhhh", asr.sessions[0].fed[0]),
+        )
+        await conv.close()
+
     def test_pcm_24k_to_16k_converter_preserves_stream_continuity(self) -> None:
         converter = _Pcm16RateConverter(24_000, 16_000)
         source = struct.pack("<hhhhhh", 100, 200, 400, -100, -200, -400)

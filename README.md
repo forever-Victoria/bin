@@ -139,6 +139,7 @@ ws://<host>:8765?device_id=bin-001&role_id=shanshan
 | `DEFAULT_ROLE_ID` | `trash_can` | 默认角色 |
 | `VOLC_APPID` / `VOLC_ACCESS_TOKEN` | — | 豆包语音凭证 |
 | `ASR_RESOURCE_ID` | `volc.bigasr.sauc.duration` | ASR 资源 ID（2.0 用 `volc.seedasr.sauc.duration`） |
+| `ASR_INPUT_GAIN` | `2.0` | 仅在送入 ASR 前对 PCM16 做饱和软件增益；不影响打断检测 |
 | `TTS_CLUSTER` | `volcano_tts` | TTS V1 集群 |
 | `TTS_VOICE_TYPE` | `BV700_streaming` | 兜底音色（角色未指定时） |
 | `ARK_API_KEY` | — | 方舟 LLM Key |
