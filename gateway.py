@@ -141,7 +141,7 @@ async def _on_text(conv: Conversation, ws: WebSocket, text: str) -> None:
         await ws.send_text(M.error("忽略非 JSON 控制文本帧"))
         return
     if t == M.LISTEN_START:
-        await conv.on_listen_start()
+        await conv.on_listen_start(_int_field(obj, "turn_id"))
     elif t == M.LISTEN_END:
         await conv.on_listen_end()
     elif t == M.CANCEL:

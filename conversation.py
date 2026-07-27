@@ -186,7 +186,7 @@ class Conversation:
         self._log(f"已切换角色: {role.id} ({role.display_name})")
         return True
 
-    async def on_listen_start(self) -> None:
+    async def on_listen_start(self, turn_id: int = 0) -> None:
         if self._phase == Phase.LISTENING:
             if self._awaiting_barge_ack:
                 await self._complete_barge_handshake("listen_start")
@@ -194,8 +194,16 @@ class Conversation:
             return
 
         if self._phase == Phase.SPEAKING and self._barge_config.enabled:
-            # New firmware normally sends barge_candidate; listen_start stays
-            # as a rolling-upgrade compatible explicit interruption signal.
+            # A normal client-VAD listen_start has no turn_id. If a stale
+            # listening transition races with tts_start, playback residual can
+            # produce exactly that frame. Only an explicit message tied to the
+            # active TTS turn may act as a compatibility barge-in signal.
+            if turn_id <= 0 or turn_id != self._active_tts_turn_id:
+                self._log(
+                    "忽略播放期间无效 listen_start："
+                    f"turn={turn_id} active={self._active_tts_turn_id}"
+                )
+                return
             if self._generation_complete:
                 await self._begin_listening_after_playback()
             else:

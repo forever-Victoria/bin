@@ -170,6 +170,49 @@ class ConversationBargeInTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(Phase.IDLE, conv.phase)
         await conv.close()
 
+    async def test_plain_listen_start_during_tts_does_not_barge_in(self) -> None:
+        sent_text: list[dict] = []
+        first_audio = asyncio.Event()
+
+        async def send_text(payload: str) -> None:
+            sent_text.append(json.loads(payload))
+
+        async def send_bytes(payload: bytes) -> None:
+            self.assertTrue(payload)
+            first_audio.set()
+
+        asr = FakeAsr()
+        conv = Conversation(
+            role=VoiceRole("test", "Test", "speaker", "be concise"),
+            send_text=send_text,
+            send_bytes=send_bytes,
+            logger=lambda _: None,
+            asr=asr,
+            llm=SlowLlm(),
+            tts=FakeTts(),
+            barge_config=BargeInConfig(enabled=True),
+        )
+        await conv.on_listen_start()
+        await conv.on_audio(struct.pack("<h", 1000) * 640)
+        await conv.on_listen_end()
+        await asyncio.wait_for(first_audio.wait(), timeout=1)
+
+        active_turn = conv.active_tts_turn_id
+        self.assertGreater(active_turn, 0)
+        self.assertEqual(Phase.SPEAKING, conv.phase)
+
+        await conv.on_listen_start()
+
+        self.assertEqual(Phase.SPEAKING, conv.phase)
+        self.assertEqual(1, len(asr.sessions))
+        self.assertFalse(any(item["type"] == "barge_in" for item in sent_text))
+
+        await conv.on_listen_start(active_turn)
+        self.assertEqual(Phase.LISTENING, conv.phase)
+        self.assertEqual(2, len(asr.sessions))
+        self.assertTrue(any(item["type"] == "barge_in" for item in sent_text))
+        await conv.close()
+
     async def test_receive_path_stays_live_and_barge_in_starts_new_asr(self) -> None:
         sent_text: list[dict] = []
         first_audio = asyncio.Event()
