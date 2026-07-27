@@ -164,7 +164,7 @@ class Settings:
             min_transcript_chars=_int_env("MIN_TRANSCRIPT_CHARS", 1),
             transcript_wait_sec=_int_env("TRANSCRIPT_WAIT_SEC", 12),
             tts_chunk_ms=_int_env("TTS_CHUNK_MS", 40),
-            tts_stream_lead_ms=_int_env("TTS_STREAM_LEAD_MS", 200),
+            tts_stream_lead_ms=_int_env("TTS_STREAM_LEAD_MS", 1000),
             device_raw_log=_bool_env("DEVICE_RAW_LOG", True),
         )
 

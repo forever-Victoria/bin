@@ -44,6 +44,11 @@ async def lifespan(_app: FastAPI):
             settings.barge_in_startup_guard_ms,
             settings.barge_in_warmup_ms,
         )
+    log.info(
+        "Downlink PCM pacing: chunk=%dms lead=%dms",
+        settings.tts_chunk_ms,
+        settings.tts_stream_lead_ms,
+    )
     log.info("可用角色: %s", ", ".join(r.id for r in role_registry.all()))
     log.info("连接示例: ws://<host>:%d?device_id=bin-001&role_id=shanshan", settings.port)
     yield

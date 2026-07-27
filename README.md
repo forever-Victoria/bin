@@ -153,7 +153,7 @@ ws://<host>:8765?device_id=bin-001&role_id=shanshan
 | `BARGE_IN_WARMUP_RMS_THRESHOLD` | `40` | A-59F 收敛期的残差 RMS 门槛 |
 | `BARGE_IN_WARMUP_HOLD_MS` | `160` | 收敛期内确认打断所需持续时间 |
 | `TTS_CHUNK_MS` | `40` | 下行 PCM WebSocket 分片时长 |
-| `TTS_STREAM_LEAD_MS` | `200` | 下行最多领先播放的时长，避免音频堵住打断控制帧 |
+| `TTS_STREAM_LEAD_MS` | `1000` | 下行最多领先播放的时长；吸收网络抖动，同时限制打断控制帧前的音频积压 |
 
 ## 服务实现（事实来自官方文档）
 
