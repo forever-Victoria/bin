@@ -125,6 +125,16 @@ class Conversation:
         self._downlink_converter = _Pcm16RateConverter(
             settings.tts_sample_rate, self._downlink_sample_rate
         )
+        self._downlink_chunk_bytes = max(
+            2,
+            self._downlink_sample_rate * 2 * settings.tts_chunk_ms // 1000,
+        )
+        self._downlink_lead_seconds = max(
+            0.0, settings.tts_stream_lead_ms / 1000
+        )
+        self._downlink_chunk_buffer = bytearray()
+        self._downlink_queue: asyncio.Queue[bytes | None] | None = None
+        self._downlink_sender_task: asyncio.Task[None] | None = None
         self._phase = Phase.IDLE
         self._history: list[dict] = []
         self._lock = asyncio.Lock()
@@ -344,6 +354,7 @@ class Conversation:
             self._generation_complete = False
             self._barge_detector.reset()
             self._downlink_converter.reset()
+            self._start_downlink_sender()
 
         await self._send_text_frame(M.tts_start(turn_id))
         buf = ""
@@ -369,6 +380,8 @@ class Conversation:
             if buf.strip():
                 t_first_audio = await self._speak_text(buf, t0, t_first_audio)
 
+            await self._finish_downlink_sender()
+
             if full.strip():
                 clean = full.strip()
                 await self._send_text_frame(M.transcript("assistant", clean))
@@ -390,9 +403,11 @@ class Conversation:
                         self._active_tts_turn_id = 0
                 self._log("本轮回复完成 → IDLE")
         except asyncio.CancelledError:
+            await self._stop_downlink_sender()
             self._log(f"回答 turn={turn_id} 已被打断")
             raise
         except Exception as exc:  # noqa: BLE001
+            await self._stop_downlink_sender()
             what = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
             self._log(f"处理异常: {what}")
             log.exception("处理失败")
@@ -421,10 +436,9 @@ class Conversation:
             if first_audio is None:
                 first_audio = time.monotonic()
                 self._log(f"[时延] 首音（松手→出声）{first_audio - t0:.2f}s")
-            self._barge_detector.remember_playback(pcm)
             downlink_pcm = self._downlink_converter.convert(pcm)
             if downlink_pcm:
-                await self._send_bytes_frame(downlink_pcm)
+                self._queue_downlink_pcm(downlink_pcm)
         return first_audio
 
     async def on_barge_candidate(self, turn_id: int = 0) -> None:
@@ -464,6 +478,7 @@ class Conversation:
 
         if task is not None and task is not asyncio.current_task() and not task.done():
             task.cancel()
+        await self._stop_downlink_sender()
         await self._send_text_frame(M.barge_in(interrupted_turn))
         self._log(f"已触发全双工打断（{source}）→ LISTENING，turn={interrupted_turn}")
         if task is not None and task is not asyncio.current_task() and not task.done():
@@ -553,6 +568,7 @@ class Conversation:
                 await task
             except asyncio.CancelledError:
                 pass
+        await self._stop_downlink_sender()
         session = self._asr_sess
         self._asr_sess = None
         await self._close_session(session)
@@ -575,6 +591,73 @@ class Conversation:
     async def _send_bytes_frame(self, pcm: bytes) -> None:
         async with self._send_lock:
             await self._send_bytes(pcm)
+
+    def _start_downlink_sender(self) -> None:
+        self._downlink_chunk_buffer.clear()
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self._downlink_queue = queue
+        self._downlink_sender_task = asyncio.create_task(
+            self._run_downlink_sender(queue)
+        )
+
+    def _queue_downlink_pcm(self, pcm: bytes) -> None:
+        queue = self._downlink_queue
+        if queue is None:
+            raise RuntimeError("downlink sender is not running")
+        self._downlink_chunk_buffer.extend(pcm)
+        while len(self._downlink_chunk_buffer) >= self._downlink_chunk_bytes:
+            chunk = bytes(self._downlink_chunk_buffer[: self._downlink_chunk_bytes])
+            del self._downlink_chunk_buffer[: self._downlink_chunk_bytes]
+            queue.put_nowait(chunk)
+
+    async def _finish_downlink_sender(self) -> None:
+        queue = self._downlink_queue
+        task = self._downlink_sender_task
+        if queue is None or task is None:
+            return
+        if self._downlink_chunk_buffer:
+            queue.put_nowait(bytes(self._downlink_chunk_buffer))
+            self._downlink_chunk_buffer.clear()
+        queue.put_nowait(None)
+        try:
+            await task
+        finally:
+            if self._downlink_sender_task is task:
+                self._downlink_sender_task = None
+                self._downlink_queue = None
+
+    async def _stop_downlink_sender(self) -> None:
+        task = self._downlink_sender_task
+        self._downlink_sender_task = None
+        self._downlink_queue = None
+        self._downlink_chunk_buffer.clear()
+        if task is None or task is asyncio.current_task() or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _run_downlink_sender(
+        self, queue: asyncio.Queue[bytes | None]
+    ) -> None:
+        media_deadline = time.monotonic()
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                return
+            duration = len(chunk) / (self._downlink_sample_rate * 2)
+            now = time.monotonic()
+            send_at = media_deadline + duration - self._downlink_lead_seconds
+            if send_at > now:
+                await asyncio.sleep(send_at - now)
+                now = time.monotonic()
+            self._barge_detector.remember_playback(
+                chunk, sample_rate=self._downlink_sample_rate
+            )
+            await self._send_bytes_frame(chunk)
+            media_deadline = max(media_deadline, now) + duration
 
     @staticmethod
     async def _close_session(session: ASRSession | None) -> None:

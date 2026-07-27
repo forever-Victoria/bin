@@ -211,15 +211,22 @@ class BargeInDetector:
             or self._playback_cursor < self._warmup_samples
         )
 
-    def remember_playback(self, pcm_24k: bytes) -> None:
-        """Retain 24 kHz PCM as a 16 kHz echo reference (3 samples -> 2)."""
-        values = self._rate_carry + list(_samples(pcm_24k[: len(pcm_24k) & ~1]))
-        complete = len(values) - (len(values) % 3)
-        converted: list[int] = []
-        for i in range(0, complete, 3):
-            converted.append(values[i])
-            converted.append((values[i + 1] + values[i + 2]) // 2)
-        self._rate_carry = values[complete:]
+    def remember_playback(self, pcm: bytes, sample_rate: int = 24_000) -> None:
+        """Retain the PCM actually sent to the device as a 16 kHz reference."""
+        source = list(_samples(pcm[: len(pcm) & ~1]))
+        if sample_rate == SAMPLE_RATE:
+            converted = source
+            self._rate_carry.clear()
+        elif sample_rate == 24_000:
+            values = self._rate_carry + source
+            complete = len(values) - (len(values) % 3)
+            converted = []
+            for i in range(0, complete, 3):
+                converted.append(values[i])
+                converted.append((values[i + 1] + values[i + 2]) // 2)
+            self._rate_carry = values[complete:]
+        else:
+            raise ValueError(f"unsupported playback reference rate: {sample_rate}")
         if converted:
             self._reference.extend(converted)
             self._reference_total += len(converted)

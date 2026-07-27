@@ -152,6 +152,8 @@ ws://<host>:8765?device_id=bin-001&role_id=shanshan
 | `BARGE_IN_WARMUP_MS` | `2500` | TTS 起播后的 AEC/VAD 收敛期 |
 | `BARGE_IN_WARMUP_RMS_THRESHOLD` | `60` | 按 A-59F 远场打断实测标定的收敛期残差 RMS 门槛 |
 | `BARGE_IN_WARMUP_HOLD_MS` | `160` | 收敛期内确认打断所需持续时间 |
+| `TTS_CHUNK_MS` | `40` | 下行 PCM WebSocket 分片时长 |
+| `TTS_STREAM_LEAD_MS` | `200` | 下行最多领先播放的时长，避免音频堵住打断控制帧 |
 
 ## 服务实现（事实来自官方文档）
 

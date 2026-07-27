@@ -135,28 +135,34 @@ class ConversationBargeInTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_full_duplex_turn_waits_for_real_playback_completion(self) -> None:
         sent_text: list[dict] = []
+        sent_audio: list[bytes] = []
 
         async def send_text(payload: str) -> None:
             sent_text.append(json.loads(payload))
 
+        async def send_bytes(payload: bytes) -> None:
+            sent_audio.append(payload)
+
         conv = Conversation(
             role=VoiceRole("test", "Test", "speaker", "be concise"),
             send_text=send_text,
-            send_bytes=lambda _: asyncio.sleep(0),
+            send_bytes=send_bytes,
             logger=lambda _: None,
             asr=FakeAsr(),
             llm=FiniteLlm(),
             tts=FakeTts(),
             barge_config=BargeInConfig(enabled=True),
+            downlink_sample_rate=16_000,
         )
         await conv.on_listen_start()
         await conv.on_listen_end()
-        for _ in range(20):
+        for _ in range(100):
             if any(item["type"] == "tts_end" for item in sent_text):
                 break
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.01)
 
         end = next(item for item in sent_text if item["type"] == "tts_end")
+        self.assertEqual([1280] * 5, [len(payload) for payload in sent_audio])
         self.assertEqual(Phase.SPEAKING, conv.phase)
         await conv.on_playback_complete(end["turn_id"] + 1)
         self.assertEqual(Phase.SPEAKING, conv.phase)

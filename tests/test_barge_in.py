@@ -79,6 +79,17 @@ class BargeInDetectorTest(unittest.TestCase):
         self.assertFalse(detector.accept(loud).triggered)
         self.assertTrue(detector.accept(loud).triggered)
 
+    def test_native_16k_playback_reference_rejects_echo(self) -> None:
+        detector = self.detector(threshold=500, hold_ms=80)
+        playback = sine_frame(4200, 440, duration_ms=1000, rate=16_000)
+        detector.remember_playback(playback, sample_rate=16_000)
+        detector.update_playback_cursor(16_000)
+
+        detection = detector.accept(sine_frame(4200, 440))
+
+        self.assertTrue(detection.playback_echo)
+        self.assertFalse(detection.triggered)
+
     def test_warmup_uses_stricter_threshold_and_hold(self) -> None:
         detector = BargeInDetector(
             BargeInConfig(
