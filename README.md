@@ -145,12 +145,12 @@ ws://<host>:8765?device_id=bin-001&role_id=shanshan
 | `ARK_MODEL` | `doubao-seed-1-6-flash-250828` | 豆包 Model ID 或 `ep-xxx` |
 | `MIN_TRANSCRIPT_CHARS` | `1` | 有效话术最小字数 |
 | `BARGE_IN_ENABLED` | `false` | 开启全双工打断，并通过 `ready.barge_in` 通知设备 |
-| `BARGE_IN_RMS_THRESHOLD` | `40` | 按 A-59F 远场打断实测标定的回声消除后近端语音最低 RMS |
+| `BARGE_IN_RMS_THRESHOLD` | `25` | A-59F 远场打断的回声消除后近端语音最低 RMS |
 | `BARGE_IN_HOLD_MS` | `80` | 连续达到阈值多久才确认打断 |
 | `BARGE_IN_PRE_ROLL_MS` | `300` | 打断时补给新 ASR 会话的前置音频 |
 | `BARGE_IN_STARTUP_GUARD_MS` | `600` | TTS 实际起播后的防误打断窗口（期间仍上传并保留预录） |
 | `BARGE_IN_WARMUP_MS` | `2500` | TTS 起播后的 AEC/VAD 收敛期 |
-| `BARGE_IN_WARMUP_RMS_THRESHOLD` | `60` | 按 A-59F 远场打断实测标定的收敛期残差 RMS 门槛 |
+| `BARGE_IN_WARMUP_RMS_THRESHOLD` | `40` | A-59F 收敛期的残差 RMS 门槛 |
 | `BARGE_IN_WARMUP_HOLD_MS` | `160` | 收敛期内确认打断所需持续时间 |
 | `TTS_CHUNK_MS` | `40` | 下行 PCM WebSocket 分片时长 |
 | `TTS_STREAM_LEAD_MS` | `200` | 下行最多领先播放的时长，避免音频堵住打断控制帧 |
