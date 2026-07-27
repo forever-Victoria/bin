@@ -38,6 +38,23 @@ def mixed_frame(
 
 
 class BargeInDetectorTest(unittest.TestCase):
+    def test_device_vad_gate_blocks_echo_until_near_end_vad_is_active(self) -> None:
+        detector = BargeInDetector(
+            BargeInConfig(
+                enabled=True,
+                rms_threshold=100,
+                hold_ms=80,
+                startup_guard_ms=0,
+                warmup_ms=0,
+            )
+        )
+        speech = sine_frame(2000, 700, duration_ms=40)
+
+        self.assertFalse(detector.accept(speech, trigger_enabled=False).triggered)
+        self.assertFalse(detector.accept(speech, trigger_enabled=False).triggered)
+        self.assertFalse(detector.accept(speech, trigger_enabled=True).triggered)
+        self.assertTrue(detector.accept(speech, trigger_enabled=True).triggered)
+
     def detector(self, threshold: int = 1800, hold_ms: int = 120) -> BargeInDetector:
         return BargeInDetector(
             BargeInConfig(

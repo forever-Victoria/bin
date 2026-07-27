@@ -78,6 +78,7 @@ async def handle_device(
     device_id: str,
     role_id: str | None,
     requested_downlink_rate: str | None = None,
+    device_vad_gate: bool = False,
 ) -> None:
     await _kick_existing(device_id, ws)
     _connections[device_id] = ws
@@ -97,6 +98,7 @@ async def handle_device(
         llm=_llm,
         tts=_tts,
         downlink_sample_rate=downlink_rate,
+        device_vad_gate=device_vad_gate,
     )
 
     try:
@@ -110,7 +112,8 @@ async def handle_device(
         )
         logger(
             f"已就绪 角色={role.id}({role.display_name}) "
-            f"下行={downlink_rate}Hz | 当前在线 {len(_connections)} 台"
+            f"下行={downlink_rate}Hz 设备VAD门控={int(device_vad_gate)} "
+            f"| 当前在线 {len(_connections)} 台"
         )
 
         while True:
@@ -154,6 +157,10 @@ async def _on_text(conv: Conversation, ws: WebSocket, text: str) -> None:
         await conv.on_barge_candidate(_int_field(obj, "turn_id"))
     elif t == M.BARGE_ACK:
         await conv.on_barge_ack(_int_field(obj, "turn_id"))
+    elif t == M.BARGE_VAD:
+        await conv.on_barge_vad(
+            obj.get("active") is True, _int_field(obj, "turn_id")
+        )
     elif t == M.PLAYBACK_PROGRESS:
         await conv.on_playback_progress(
             _int_field(obj, "turn_id"), _int_field(obj, "samples", -1)

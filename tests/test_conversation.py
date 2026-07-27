@@ -89,6 +89,49 @@ class RejectSymbolOnlyTts(TTSService):
 
 
 class ConversationBargeInTest(unittest.IsolatedAsyncioTestCase):
+    async def test_server_barge_in_requires_device_vad_when_negotiated(self) -> None:
+        sent_text: list[dict] = []
+        first_audio = asyncio.Event()
+
+        async def send_text(payload: str) -> None:
+            sent_text.append(json.loads(payload))
+
+        async def send_bytes(payload: bytes) -> None:
+            self.assertTrue(payload)
+            first_audio.set()
+
+        conv = Conversation(
+            role=VoiceRole("test", "Test", "speaker", "be concise"),
+            send_text=send_text,
+            send_bytes=send_bytes,
+            logger=lambda _: None,
+            asr=FakeAsr(),
+            llm=SlowLlm(),
+            tts=FakeTts(),
+            barge_config=BargeInConfig(
+                enabled=True,
+                rms_threshold=100,
+                hold_ms=80,
+                startup_guard_ms=0,
+                warmup_ms=0,
+            ),
+            device_vad_gate=True,
+        )
+        await conv.on_listen_start()
+        await conv.on_listen_end()
+        await asyncio.wait_for(first_audio.wait(), timeout=1)
+        loud = struct.pack("<h", 4000) * 640
+
+        await conv.on_audio(loud)
+        await conv.on_audio(loud)
+        self.assertEqual(Phase.SPEAKING, conv.phase)
+
+        await conv.on_barge_vad(True, conv.active_tts_turn_id)
+        await conv.on_audio(loud)
+        await conv.on_audio(loud)
+        self.assertEqual(Phase.LISTENING, conv.phase)
+        await conv.close()
+
     def test_pcm_24k_to_16k_converter_preserves_stream_continuity(self) -> None:
         converter = _Pcm16RateConverter(24_000, 16_000)
         source = struct.pack("<hhhhhh", 100, 200, 400, -100, -200, -400)

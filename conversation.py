@@ -113,6 +113,7 @@ class Conversation:
         tts: TTSService,
         barge_config: BargeInConfig | None = None,
         downlink_sample_rate: int | None = None,
+        device_vad_gate: bool = False,
     ) -> None:
         self.role = role
         self._send_text = send_text
@@ -169,6 +170,8 @@ class Conversation:
         self._pending_barge_pre_roll = b""
         self._pending_barge_ack_audio = bytearray()
         self._last_barge_log_at = 0.0
+        self._device_vad_gate = device_vad_gate
+        self._device_voice_active = False
 
     @property
     def phase(self) -> Phase:
@@ -252,13 +255,20 @@ class Conversation:
         if not pcm:
             return
         if self._phase == Phase.SPEAKING and self._barge_config.enabled:
-            detection = self._barge_detector.accept(pcm)
+            detection = self._barge_detector.accept(
+                pcm,
+                trigger_enabled=(
+                    not self._device_vad_gate or self._device_voice_active
+                ),
+            )
             now = time.monotonic()
             if now - self._last_barge_log_at >= 0.5:
                 self._last_barge_log_at = now
                 decision = (
                     "BARGE_IN"
                     if detection.triggered
+                    else "VAD_GATE"
+                    if self._device_vad_gate and not self._device_voice_active
                     else "GUARD"
                     if detection.startup_guard
                     else "ECHO"
@@ -361,6 +371,7 @@ class Conversation:
             self._active_tts_turn_id = turn_id
             self._generation_complete = False
             self._barge_detector.reset()
+            self._device_voice_active = False
             self._downlink_converter.reset()
             self._start_downlink_sender()
 
@@ -462,6 +473,19 @@ class Conversation:
             return
         await self._begin_barge_in(
             self._barge_detector.snapshot_pre_roll(), "设备高置信候选"
+        )
+
+    async def on_barge_vad(self, active: bool, turn_id: int = 0) -> None:
+        if (
+            not self._device_vad_gate
+            or self._phase != Phase.SPEAKING
+            or not self._matches_turn(turn_id, self._active_tts_turn_id)
+        ):
+            return
+        self._device_voice_active = active
+        self._log(
+            f"设备播放期 VAD={'active' if active else 'inactive'} "
+            f"turn={turn_id or self._active_tts_turn_id}"
         )
 
     async def _begin_barge_in(self, pre_roll: bytes, source: str) -> None:

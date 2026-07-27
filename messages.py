@@ -19,6 +19,7 @@ PLAYBACK_PROGRESS = "playback_progress"
 PLAYBACK_COMPLETE = "playback_complete"
 BARGE_CANDIDATE = "barge_candidate"
 BARGE_ACK = "barge_ack"
+BARGE_VAD = "barge_vad"
 
 # ── 网关 → 设备（下行 type）──────────────────────────────────────────────
 READY = "ready"

@@ -99,7 +99,7 @@ class BargeInDetector:
         self._loud_samples = 0
         self._triggered = False
 
-    def accept(self, pcm: bytes) -> Detection:
+    def accept(self, pcm: bytes, trigger_enabled: bool = True) -> Detection:
         if self._triggered or len(pcm) < BYTES_PER_SAMPLE:
             return Detection()
 
@@ -171,7 +171,7 @@ class BargeInDetector:
         # Preserve the original hardware-AEC microphone audio for ASR.  The
         # fitted residual is a detector feature only and is never fed to ASR.
         self._remember_pre_roll(current)
-        if residual_has_speech:
+        if residual_has_speech and trigger_enabled:
             self._loud_samples += len(samples)
         else:
             self._loud_samples = 0

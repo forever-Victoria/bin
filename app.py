@@ -75,4 +75,7 @@ async def device_ws(ws: WebSocket) -> None:
     device_id = ws.query_params.get("device_id") or f"web-{client_host}"
     role_id = ws.query_params.get("role_id")
     downlink_rate = ws.query_params.get("downlink_rate")
-    await gateway.handle_device(ws, device_id, role_id, downlink_rate)
+    device_vad_gate = ws.query_params.get("barge_vad") == "1"
+    await gateway.handle_device(
+        ws, device_id, role_id, downlink_rate, device_vad_gate
+    )
