@@ -76,7 +76,6 @@ class Settings:
     asr_resource_id: str
     asr_ws_url: str
     asr_sample_rate: int     # 上行 16k
-    asr_input_gain: float    # 仅送入 ASR 前的软件增益，不影响打断检测
 
     # ── 豆包 TTS（V1 ws_binary）───────────────────────────────────────────
     tts_appid: str           # 语音合成 的 APP ID（留空则复用 volc_appid）
@@ -133,7 +132,6 @@ class Settings:
             asr_ws_url=_env("ASR_WS_URL",
                             "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"),
             asr_sample_rate=_int_env("ASR_SAMPLE_RATE", 16000),
-            asr_input_gain=max(0.0, _float_env("ASR_INPUT_GAIN", 2.0)),
 
             tts_appid=_env("TTS_APPID", volc_appid),
             tts_access_token=_env("TTS_ACCESS_TOKEN", volc_token),

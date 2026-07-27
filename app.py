@@ -49,10 +49,6 @@ async def lifespan(_app: FastAPI):
         settings.tts_chunk_ms,
         settings.tts_stream_lead_ms,
     )
-    log.info(
-        "ASR input PCM gain: %.2fx (barge detector remains raw)",
-        settings.asr_input_gain,
-    )
     log.info("可用角色: %s", ", ".join(r.id for r in role_registry.all()))
     log.info("连接示例: ws://<host>:%d?device_id=bin-001&role_id=shanshan", settings.port)
     yield
