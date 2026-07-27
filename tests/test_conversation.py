@@ -6,7 +6,7 @@ import struct
 import unittest
 
 from barge_in import BargeInConfig
-from conversation import Conversation, Phase
+from conversation import Conversation, Phase, _Pcm16EdgeFader
 from roles import VoiceRole
 from services.base import ASRService, ASRSession, LLMService, TTSService
 
@@ -89,6 +89,24 @@ class RejectSymbolOnlyTts(TTSService):
 
 
 class ConversationBargeInTest(unittest.IsolatedAsyncioTestCase):
+    def test_tts_fragment_edges_are_faded_without_changing_pcm_length(self) -> None:
+        fader = _Pcm16EdgeFader(sample_rate=1000, fade_ms=5)
+        first = fader.feed(struct.pack("<h", 10_000) * 12)
+        last = fader.finish()
+        samples = struct.unpack("<" + "h" * ((len(first) + len(last)) // 2), first + last)
+
+        self.assertEqual(12 * 2, len(first) + len(last))
+        self.assertEqual(0, samples[0])
+        self.assertEqual(10_000, samples[5])
+        self.assertEqual(0, samples[-1])
+
+    def test_short_tts_fragment_fades_both_edges(self) -> None:
+        fader = _Pcm16EdgeFader(sample_rate=1000, fade_ms=5)
+        self.assertEqual(b"", fader.feed(struct.pack("<h", 10_000) * 3))
+        samples = struct.unpack("<hhh", fader.finish())
+
+        self.assertEqual((0, 1250, 0), samples)
+
     async def test_punctuation_only_fragment_is_not_sent_to_tts(self) -> None:
         sent_text: list[dict] = []
 
