@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import struct
 import time
 from enum import Enum
 from typing import Awaitable, Callable
@@ -30,7 +29,6 @@ _SENT_RE = re.compile(r"[。！？!?…\n]")
 _MAX_NO_PUNCT = 40
 _MAX_BARGE_ACK_AUDIO_BYTES = 16_000 * 2 * 2
 _MAX_SAFE_BARGE_ACK_MS = 1500
-_TTS_EDGE_FADE_MS = 5
 
 
 def _take_sentence(buf: str) -> tuple[str | None, str]:
@@ -46,56 +44,6 @@ def _take_sentence(buf: str) -> tuple[str | None, str]:
 def _has_speakable_text(text: str) -> bool:
     """Return whether a TTS fragment contains at least one letter or digit."""
     return any(char.isalnum() for char in text)
-
-
-class _Pcm16EdgeFader:
-    """Smooth one independently synthesized PCM fragment without buffering it all."""
-
-    def __init__(self, sample_rate: int, fade_ms: int = _TTS_EDGE_FADE_MS) -> None:
-        self._fade_samples = max(2, sample_rate * fade_ms // 1000)
-        self._tail = bytearray()
-        self._samples_emitted = 0
-
-    def feed(self, pcm: bytes) -> bytes:
-        if len(pcm) % 2:
-            raise ValueError("TTS PCM16 数据长度必须是偶数")
-        self._tail.extend(pcm)
-        emit_bytes = len(self._tail) - self._fade_samples * 2
-        emit_bytes -= emit_bytes % 2
-        if emit_bytes <= 0:
-            return b""
-        output = bytearray(self._tail[:emit_bytes])
-        del self._tail[:emit_bytes]
-        self._apply_fade_in(output)
-        return bytes(output)
-
-    def finish(self) -> bytes:
-        output = self._tail
-        self._tail = bytearray()
-        self._apply_fade_in(output)
-
-        tail_samples = min(self._fade_samples, len(output) // 2)
-        if tail_samples:
-            start = len(output) // 2 - tail_samples
-            denominator = max(1, tail_samples - 1)
-            for index in range(tail_samples):
-                offset = (start + index) * 2
-                sample = struct.unpack_from("<h", output, offset)[0]
-                gain = (tail_samples - 1 - index) / denominator
-                struct.pack_into("<h", output, offset, round(sample * gain))
-        return bytes(output)
-
-    def _apply_fade_in(self, output: bytearray) -> None:
-        sample_count = len(output) // 2
-        remaining = max(0, self._fade_samples - self._samples_emitted)
-        fade_count = min(sample_count, remaining)
-        denominator = self._fade_samples - 1
-        for index in range(fade_count):
-            offset = index * 2
-            sample = struct.unpack_from("<h", output, offset)[0]
-            gain = (self._samples_emitted + index) / denominator
-            struct.pack_into("<h", output, offset, round(sample * gain))
-        self._samples_emitted += sample_count
 
 
 SendText = Callable[[str], Awaitable[None]]
@@ -420,19 +368,12 @@ class Conversation:
         if not _has_speakable_text(text):
             log.debug("跳过不可合成的纯符号片段: %r", text)
             return first_audio
-        fader = _Pcm16EdgeFader(settings.tts_sample_rate)
         async for pcm in self._tts.synthesize(text, self.role.speaker):
             if first_audio is None:
                 first_audio = time.monotonic()
                 self._log(f"[时延] 首音（松手→出声）{first_audio - t0:.2f}s")
-            smoothed = fader.feed(pcm)
-            if smoothed:
-                self._barge_detector.remember_playback(smoothed)
-                await self._send_bytes_frame(smoothed)
-        smoothed = fader.finish()
-        if smoothed:
-            self._barge_detector.remember_playback(smoothed)
-            await self._send_bytes_frame(smoothed)
+            self._barge_detector.remember_playback(pcm)
+            await self._send_bytes_frame(pcm)
         return first_audio
 
     async def on_barge_candidate(self, turn_id: int = 0) -> None:
