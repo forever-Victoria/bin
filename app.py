@@ -45,8 +45,10 @@ async def lifespan(_app: FastAPI):
             settings.barge_in_warmup_ms,
         )
     log.info(
-        "Downlink PCM pacing: chunk=%dms lead=%dms",
+        "Downlink PCM pacing: chunk=%dms start_buffer=%dms max_wait=%dms lead=%dms",
         settings.tts_chunk_ms,
+        settings.tts_start_buffer_ms,
+        settings.tts_start_buffer_max_wait_ms,
         settings.tts_stream_lead_ms,
     )
     log.info("可用角色: %s", ", ".join(r.id for r in role_registry.all()))

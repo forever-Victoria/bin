@@ -9,6 +9,7 @@ starts a fresh streaming ASR session with retained near-end pre-roll.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import logging
 import re
 import sys
@@ -114,6 +115,8 @@ class Conversation:
         barge_config: BargeInConfig | None = None,
         downlink_sample_rate: int | None = None,
         device_vad_gate: bool = False,
+        downlink_start_buffer_ms: int | None = None,
+        downlink_start_buffer_max_wait_ms: int | None = None,
     ) -> None:
         self.role = role
         self._send_text = send_text
@@ -132,6 +135,24 @@ class Conversation:
         )
         self._downlink_lead_seconds = max(
             0.0, settings.tts_stream_lead_ms / 1000
+        )
+        self._downlink_start_buffer_seconds = max(
+            0.0,
+            (
+                settings.tts_start_buffer_ms
+                if downlink_start_buffer_ms is None
+                else downlink_start_buffer_ms
+            )
+            / 1000,
+        )
+        self._downlink_start_buffer_max_wait_seconds = max(
+            0.0,
+            (
+                settings.tts_start_buffer_max_wait_ms
+                if downlink_start_buffer_max_wait_ms is None
+                else downlink_start_buffer_max_wait_ms
+            )
+            / 1000,
         )
         self._downlink_chunk_buffer = bytearray()
         self._downlink_queue: asyncio.Queue[bytes | None] | None = None
@@ -674,11 +695,50 @@ class Conversation:
     async def _run_downlink_sender(
         self, queue: asyncio.Queue[bytes | None]
     ) -> None:
+        pending: deque[bytes] = deque()
+        buffered_seconds = 0.0
+        stream_ended = False
+
+        # TTS chunks arrive in bursts. Build a real reserve before the first
+        # WebSocket audio frame so the device's small 120 ms prebuffer is not
+        # exposed directly to 300-700 ms producer/network gaps. Short replies
+        # are released as soon as synthesis finishes.
+        if self._downlink_start_buffer_seconds > 0:
+            first = await queue.get()
+            if first is None:
+                return
+            pending.append(first)
+            buffered_seconds += len(first) / (self._downlink_sample_rate * 2)
+            buffer_deadline = (
+                time.monotonic() + self._downlink_start_buffer_max_wait_seconds
+            )
+            while buffered_seconds < self._downlink_start_buffer_seconds:
+                remaining = buffer_deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=remaining)
+                except TimeoutError:
+                    break
+                if item is None:
+                    stream_ended = True
+                    break
+                pending.append(item)
+                buffered_seconds += len(item) / (
+                    self._downlink_sample_rate * 2
+                )
+
         media_deadline = time.monotonic()
         while True:
-            chunk = await queue.get()
-            if chunk is None:
+            if pending:
+                chunk = pending.popleft()
+            elif stream_ended:
                 return
+            else:
+                item = await queue.get()
+                if item is None:
+                    return
+                chunk = item
             duration = len(chunk) / (self._downlink_sample_rate * 2)
             now = time.monotonic()
             send_at = media_deadline + duration - self._downlink_lead_seconds

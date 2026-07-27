@@ -89,6 +89,39 @@ class RejectSymbolOnlyTts(TTSService):
 
 
 class ConversationBargeInTest(unittest.IsolatedAsyncioTestCase):
+    async def test_downlink_waits_for_start_buffer_before_first_packet(self) -> None:
+        sent_audio: list[bytes] = []
+
+        async def send_bytes(payload: bytes) -> None:
+            sent_audio.append(payload)
+
+        conv = Conversation(
+            role=VoiceRole("test", "Test", "speaker", "be concise"),
+            send_text=lambda _: asyncio.sleep(0),
+            send_bytes=send_bytes,
+            logger=lambda _: None,
+            asr=FakeAsr(),
+            llm=FiniteLlm(),
+            tts=FakeTts(),
+            barge_config=BargeInConfig(enabled=False),
+            downlink_sample_rate=16_000,
+            downlink_start_buffer_ms=120,
+        )
+        chunk = bytes(16_000 * 2 * 40 // 1000)
+        conv._start_downlink_sender()
+
+        conv._queue_downlink_pcm(chunk * 2)
+        await asyncio.sleep(0)
+        self.assertEqual([], sent_audio)
+
+        conv._queue_downlink_pcm(chunk)
+        for _ in range(10):
+            if len(sent_audio) == 3:
+                break
+            await asyncio.sleep(0)
+        self.assertEqual([chunk, chunk, chunk], sent_audio)
+        await conv._finish_downlink_sender()
+
     async def test_server_barge_in_requires_device_vad_when_negotiated(self) -> None:
         sent_text: list[dict] = []
         first_audio = asyncio.Event()

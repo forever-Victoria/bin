@@ -110,6 +110,8 @@ class Settings:
     min_transcript_chars: int         # 有效话术最小字数
     transcript_wait_sec: int          # ASR 转写等待超时
     tts_chunk_ms: int                 # 下行音频分片
+    tts_start_buffer_ms: int          # 首包前积累的音频储备
+    tts_start_buffer_max_wait_ms: int # 短句等待储备的最长时间
     tts_stream_lead_ms: int           # 最多提前发送多少毫秒，限制 TCP 音频积压
     device_raw_log: bool
 
@@ -164,6 +166,10 @@ class Settings:
             min_transcript_chars=_int_env("MIN_TRANSCRIPT_CHARS", 1),
             transcript_wait_sec=_int_env("TRANSCRIPT_WAIT_SEC", 12),
             tts_chunk_ms=_int_env("TTS_CHUNK_MS", 40),
+            tts_start_buffer_ms=_int_env("TTS_START_BUFFER_MS", 800),
+            tts_start_buffer_max_wait_ms=_int_env(
+                "TTS_START_BUFFER_MAX_WAIT_MS", 500
+            ),
             tts_stream_lead_ms=_int_env("TTS_STREAM_LEAD_MS", 1000),
             device_raw_log=_bool_env("DEVICE_RAW_LOG", True),
         )

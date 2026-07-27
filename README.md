@@ -153,6 +153,8 @@ ws://<host>:8765?device_id=bin-001&role_id=shanshan
 | `BARGE_IN_WARMUP_RMS_THRESHOLD` | `40` | A-59F 收敛期的残差 RMS 门槛 |
 | `BARGE_IN_WARMUP_HOLD_MS` | `160` | 收敛期内确认打断所需持续时间 |
 | `TTS_CHUNK_MS` | `40` | 下行 PCM WebSocket 分片时长 |
+| `TTS_START_BUFFER_MS` | `800` | 首个 PCM 包发送前积累的音频储备，用于吸收 TTS/网络突发间隔 |
+| `TTS_START_BUFFER_MAX_WAIT_MS` | `500` | 短句未凑满启动储备时允许增加的最大首音等待 |
 | `TTS_STREAM_LEAD_MS` | `1000` | 下行最多领先播放的时长；吸收网络抖动，同时限制打断控制帧前的音频积压 |
 
 ## 服务实现（事实来自官方文档）
