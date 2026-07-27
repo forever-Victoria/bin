@@ -41,8 +41,16 @@ def of(type_: str, **fields: Any) -> str:
     return _dumps(payload)
 
 
-def ready(role_id: str, role_name: str, barge_in: bool) -> str:
-    return of(READY, role_id=role_id, role_name=role_name, barge_in=barge_in)
+def ready(
+    role_id: str, role_name: str, barge_in: bool, sample_rate: int = 24000
+) -> str:
+    return of(
+        READY,
+        role_id=role_id,
+        role_name=role_name,
+        barge_in=barge_in,
+        sample_rate=sample_rate,
+    )
 
 
 def role_changed(role_id: str, role_name: str) -> str:

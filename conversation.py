@@ -11,7 +11,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import sys
 import time
+from array import array
 from enum import Enum
 from typing import Awaitable, Callable
 
@@ -46,6 +48,47 @@ def _has_speakable_text(text: str) -> bool:
     return any(char.isalnum() for char in text)
 
 
+class _Pcm16RateConverter:
+    """Bounded streaming converter used for negotiated 24 kHz -> 16 kHz PCM."""
+
+    def __init__(self, source_rate: int, output_rate: int) -> None:
+        if source_rate != output_rate and (source_rate, output_rate) != (24_000, 16_000):
+            raise ValueError(
+                f"unsupported PCM rate conversion: {source_rate} -> {output_rate}"
+            )
+        self.source_rate = source_rate
+        self.output_rate = output_rate
+        self._carry = array("h")
+
+    def reset(self) -> None:
+        self._carry = array("h")
+
+    def convert(self, pcm: bytes) -> bytes:
+        if len(pcm) % 2:
+            raise ValueError("PCM16 payload length must be even")
+        if self.source_rate == self.output_rate:
+            return pcm
+
+        samples = array("h")
+        samples.frombytes(pcm)
+        if sys.byteorder != "little":
+            samples.byteswap()
+        if self._carry:
+            samples = self._carry + samples
+            self._carry = array("h")
+
+        complete = len(samples) - (len(samples) % 3)
+        output = array("h")
+        for index in range(0, complete, 3):
+            output.append(samples[index])
+            output.append((samples[index + 1] + samples[index + 2]) // 2)
+        if complete < len(samples):
+            self._carry = samples[complete:]
+        if sys.byteorder != "little":
+            output.byteswap()
+        return output.tobytes()
+
+
 SendText = Callable[[str], Awaitable[None]]
 SendBytes = Callable[[bytes], Awaitable[None]]
 LogFn = Callable[[str], None]
@@ -69,6 +112,7 @@ class Conversation:
         llm: LLMService,
         tts: TTSService,
         barge_config: BargeInConfig | None = None,
+        downlink_sample_rate: int | None = None,
     ) -> None:
         self.role = role
         self._send_text = send_text
@@ -77,6 +121,10 @@ class Conversation:
         self._asr = asr
         self._llm = llm
         self._tts = tts
+        self._downlink_sample_rate = downlink_sample_rate or settings.tts_sample_rate
+        self._downlink_converter = _Pcm16RateConverter(
+            settings.tts_sample_rate, self._downlink_sample_rate
+        )
         self._phase = Phase.IDLE
         self._history: list[dict] = []
         self._lock = asyncio.Lock()
@@ -295,6 +343,7 @@ class Conversation:
             self._active_tts_turn_id = turn_id
             self._generation_complete = False
             self._barge_detector.reset()
+            self._downlink_converter.reset()
 
         await self._send_text_frame(M.tts_start(turn_id))
         buf = ""
@@ -373,7 +422,9 @@ class Conversation:
                 first_audio = time.monotonic()
                 self._log(f"[时延] 首音（松手→出声）{first_audio - t0:.2f}s")
             self._barge_detector.remember_playback(pcm)
-            await self._send_bytes_frame(pcm)
+            downlink_pcm = self._downlink_converter.convert(pcm)
+            if downlink_pcm:
+                await self._send_bytes_frame(downlink_pcm)
         return first_audio
 
     async def on_barge_candidate(self, turn_id: int = 0) -> None:

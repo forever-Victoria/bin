@@ -15,6 +15,12 @@ class FakeWebSocket:
 
 
 class GatewayHeartbeatTest(unittest.IsolatedAsyncioTestCase):
+    def test_downlink_rate_negotiation(self) -> None:
+        self.assertEqual(16_000, gateway.negotiate_downlink_rate("16000"))
+        self.assertEqual(24_000, gateway.negotiate_downlink_rate("24000"))
+        self.assertEqual(24_000, gateway.negotiate_downlink_rate("44100"))
+        self.assertEqual(24_000, gateway.negotiate_downlink_rate(None))
+
     async def test_heartbeat_is_acknowledged(self) -> None:
         websocket = FakeWebSocket()
 

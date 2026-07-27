@@ -107,8 +107,12 @@ docker compose ps
 ws://<host>:8765?device_id=bin-001&role_id=shanshan
 ```
 
+新固件可追加 `&downlink_rate=16000` 请求原生 16k 下行。网关会在
+`ready.sample_rate` 返回实际协商结果；未声明该参数的旧固件和网页仍使用
+24k，因此可以滚动升级而不会产生采样率错配。
+
 - 上行：Text JSON（`listen_start`/`listen_end`/`cancel`/`set_role`/`heartbeat`）+ Binary PCM **16k/16bit/mono**
-- 下行：Text JSON（`ready`/`tts_start`/`tts_end`/`transcript`/`round_skip`/`error`）+ Binary PCM **24k/16bit/mono**
+- 下行：Text JSON（`ready`/`tts_start`/`tts_end`/`transcript`/`round_skip`/`error`）+ Binary PCM **协商的 16k 或兼容 24k / 16bit / mono**
 - 相同 `device_id` 踢线：旧连接收 `error` + 关闭码 `4001`
 
 ## 音色定制（换方案的核心）

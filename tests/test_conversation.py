@@ -6,7 +6,7 @@ import struct
 import unittest
 
 from barge_in import BargeInConfig
-from conversation import Conversation, Phase
+from conversation import Conversation, Phase, _Pcm16RateConverter
 from roles import VoiceRole
 from services.base import ASRService, ASRSession, LLMService, TTSService
 
@@ -89,6 +89,17 @@ class RejectSymbolOnlyTts(TTSService):
 
 
 class ConversationBargeInTest(unittest.IsolatedAsyncioTestCase):
+    def test_pcm_24k_to_16k_converter_preserves_stream_continuity(self) -> None:
+        converter = _Pcm16RateConverter(24_000, 16_000)
+        source = struct.pack("<hhhhhh", 100, 200, 400, -100, -200, -400)
+
+        first = converter.convert(source[:8])
+        second = converter.convert(source[8:])
+
+        self.assertEqual(
+            (100, 300, -100, -300), struct.unpack("<hhhh", first + second)
+        )
+
     async def test_punctuation_only_fragment_is_not_sent_to_tts(self) -> None:
         sent_text: list[dict] = []
 

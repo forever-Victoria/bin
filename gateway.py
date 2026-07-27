@@ -24,6 +24,7 @@ from services import DoubaoAsrService, DoubaoLlmService, DoubaoTtsV1Service
 log = logging.getLogger("bin.gateway")
 
 CLOSE_REPLACED = 4001
+SUPPORTED_DOWNLINK_RATES = {16_000, 24_000}
 
 # 单例服务（无状态，跨设备共享；每次识别/合成各自建 WS）
 _asr: Optional[DoubaoAsrService] = None
@@ -55,11 +56,34 @@ async def _kick_existing(device_id: str, new_ws: WebSocket) -> None:
         pass
 
 
-async def handle_device(ws: WebSocket, device_id: str, role_id: str | None) -> None:
+def negotiate_downlink_rate(requested: str | None) -> int:
+    source_rate = settings.tts_sample_rate
+    try:
+        requested_rate = int(requested or "")
+    except ValueError:
+        requested_rate = 0
+    if (
+        requested_rate in SUPPORTED_DOWNLINK_RATES
+        and (
+            requested_rate == source_rate
+            or (source_rate, requested_rate) == (24_000, 16_000)
+        )
+    ):
+        return requested_rate
+    return source_rate
+
+
+async def handle_device(
+    ws: WebSocket,
+    device_id: str,
+    role_id: str | None,
+    requested_downlink_rate: str | None = None,
+) -> None:
     await _kick_existing(device_id, ws)
     _connections[device_id] = ws
 
     role = resolve_role(role_id)
+    downlink_rate = negotiate_downlink_rate(requested_downlink_rate)
 
     def logger(msg: str) -> None:
         log.info("[设备 %s] %s", device_id, msg)
@@ -72,11 +96,22 @@ async def handle_device(ws: WebSocket, device_id: str, role_id: str | None) -> N
         asr=_asr,
         llm=_llm,
         tts=_tts,
+        downlink_sample_rate=downlink_rate,
     )
 
     try:
-        await ws.send_text(M.ready(role.id, role.display_name, settings.barge_in_enabled))
-        logger(f"已就绪 角色={role.id}({role.display_name}) | 当前在线 {len(_connections)} 台")
+        await ws.send_text(
+            M.ready(
+                role.id,
+                role.display_name,
+                settings.barge_in_enabled,
+                sample_rate=downlink_rate,
+            )
+        )
+        logger(
+            f"已就绪 角色={role.id}({role.display_name}) "
+            f"下行={downlink_rate}Hz | 当前在线 {len(_connections)} 台"
+        )
 
         while True:
             msg = await ws.receive()
